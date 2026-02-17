@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strava NoShoes - Activity Manager</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-card: #ffffff;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --border-color: #dee2e6;
+            --navbar-bg: #0d6efd;
+            --stats-gradient-start: #667eea;
+            --stats-gradient-end: #764ba2;
+        }
+
+        [data-theme="dark"] {
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-card: #2d2d2d;
+            --text-primary: #e9ecef;
+            --text-secondary: #adb5bd;
+            --border-color: #495057;
+            --navbar-bg: #0a58ca;
+            --stats-gradient-start: #4a5568;
+            --stats-gradient-end: #2d3748;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        .card {
+            background-color: var(--bg-card);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .activity-card {
+            transition: transform 0.2s, background-color 0.3s ease;
+        }
+
+        .activity-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .no-gear {
+            border-left: 4px solid #dc3545;
+        }
+
+        .has-gear {
+            border-left: 4px solid #28a745;
+        }
+
+        .loading {
+            display: none;
+        }
+
+        .stats-card {
+            background: linear-gradient(135deg, var(--stats-gradient-start) 0%, var(--stats-gradient-end) 100%);
+            color: white;
+            margin-bottom: 20px;
+        }
+
+        .type-stats-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+        }
+
+        .type-stats-card .card-title {
+            color: var(--text-primary) !important;
+        }
+
+        .type-stats-table {
+            color: var(--text-primary);
+        }
+
+        .type-stats-table th {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .type-stats-table td {
+            color: var(--text-primary);
+        }
+
+        .type-stats-table tbody tr:hover {
+            background-color: rgba(0, 0, 0, 0.05);
+        }
+
+        [data-theme="dark"] .type-stats-table tbody tr:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+            color: #ffffff;
+        }
+
+        .text-muted {
+            color: var(--text-secondary) !important;
+        }
+
+        .navbar {
+            background-color: var(--navbar-bg) !important;
+        }
+
+        .theme-toggle {
+            cursor: pointer;
+            font-size: 1.2rem;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            transition: background-color 0.2s;
+        }
+
+        .theme-toggle:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .activity-title-link {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        .activity-title-link:hover {
+            color: #0d6efd;
+            text-decoration: underline;
+        }
+
+        [data-theme="dark"] .activity-title-link:hover {
+            color: #6ea8fe;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-running"></i> Strava NoShoes
+            </a>
+            <div class="navbar-nav ms-auto">
+                <span class="nav-link theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                    <i class="fas fa-moon" id="theme-icon"></i>
+                </span>
+                <a class="nav-link" href="/docs" target="_blank">
+                    <i class="fas fa-book"></i> API Docs
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- Stats Section -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card stats-card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap">
+                            <h5 class="card-title mb-0"><i class="fas fa-chart-bar"></i> Overall Statistics</h5>
+                            <div class="d-flex align-items-center">
+                                <div id="stats-custom-date-container" class="me-2 d-none">
+                                    <div class="input-group input-group-sm">
+                                        <input type="date" class="form-control" id="stats-after-date" title="Start Date"
+                                            onchange="loadStats(); saveFilters()">
+                                        <input type="date" class="form-control" id="stats-before-date" title="End Date"
+                                            onchange="loadStats(); saveFilters()">
+                                    </div>
+                                </div>
+                                <label for="stats-range" class="me-2 small text-white">Range:</label>
+                                <select class="form-select form-select-sm" id="stats-range" style="width: auto;"
+                                    onchange="handleStatsRangeChange()">
+                                    <option value="all">All Activities</option>
+                                    <option value="1w">Last Week</option>
+                                    <option value="1m">Last Month</option>
+                                    <option value="3m">Last 3 Months</option>
+                                    <option value="1y" selected>Last Year</option>
+                                    <option value="custom">Custom Range</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Stats Loader -->
+                        <div id="stats-loading" class="text-center py-3" style="display: none;">
+                            <div class="spinner-border text-light" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                        </div>
+
+                        <div class="row" id="stats-content">
+                            <div class="col-md-3 text-center">
+                                <h3 id="total-activities">-</h3>
+                                <small>Total Activities</small>
+                            </div>
+                            <div class="col-md-3 text-center">
+                                <h3 id="total-distance">-</h3>
+                                <small>Total Distance (km)</small>
+                            </div>
+                            <div class="col-md-3 text-center">
+                                <h3 id="total-time">-</h3>
+                                <small>Total Time (hours)</small>
+                            </div>
+                            <div class="col-md-3 text-center">
+                                <h3 id="no-gear-count">-</h3>
+                                <small>Activities without Gear</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Breakdown Section -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card type-stats-card">
+                    <div class="card-body">
+                        <h5 class="card-title text-dark"><i class="fas fa-list-ul"></i> Breakdown by Activity Type</h5>
+                        <div class="table-responsive mt-3">
+                            <table class="table type-stats-table table-hover mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Activity Type</th>
+                                        <th class="text-center">Count</th>
+                                        <th class="text-center">Total Distance (km)</th>
+                                        <th class="text-center">Total Time (hours)</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="type-stats-body">
+                                    <tr>
+                                        <td colspan="4" class="text-center text-muted">Loading breakdown...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls Section -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title"><i class="fas fa-filter"></i> Activity Filters</h5>
+                        <div class="row">
+                            <div class="col-md-2">
+                                <select class="form-select" id="activity-range" onchange="handleActivityRangeChange()">
+                                    <option value="all" selected>All Activities</option>
+                                    <option value="1w">Last Week</option>
+                                    <option value="1m">Last Month</option>
+                                    <option value="3m">Last 3 Months</option>
+                                    <option value="1y">Last Year</option>
+                                    <option value="custom">Custom Range</option>
+                                </select>
+                            </div>
+                            <div id="custom-date-container" class="col-md-4 d-none">
+                                <div class="input-group">
+                                    <input type="date" class="form-control" id="after-date" title="After"
+                                        onchange="saveFilters()">
+                                    <input type="date" class="form-control" id="before-date" title="Before"
+                                        onchange="saveFilters()">
+                                </div>
+                            </div>
+                            <div class="col-md-2">
+                                <select class="form-select" id="activity-type" onchange="saveFilters()">
+                                    <option value="">All Types</option>
+                                    <option value="Run">Road Run</option>
+                                    <option value="TrailRun">Trail Run</option>
+                                    <option value="Ride">Ride</option>
+                                    <option value="Walk">Walk</option>
+                                    <option value="Hike">Hike</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <select class="form-select" id="gear-filter" onchange="saveFilters()">
+                                    <option value="">All Gear</option>
+                                    <option value="true">With Gear</option>
+                                    <option value="false">No Gear</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <button class="btn btn-primary w-100" onclick="resetAndLoad()">
+                                    <i class="fas fa-search"></i> Filter
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Loading Indicator -->
+        <div class="text-center loading" id="loading">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2">Loading activities...</p>
+        </div>
+
+        <!-- Activities Section -->
+        <div class="row" id="activities-container">
+            <!-- Activities will be loaded here -->
+        </div>
+
+        <!-- Pagination Section -->
+        <div class="row mt-4 mb-5">
+            <div class="col-12" id="pagination-container">
+                <!-- Pagination loaded by JS -->
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const API_BASE = '/api/v1';
+
+        let currentPage = 1;
+        const PER_PAGE = 30;
+
+        // Load statistics on page load
+        document.addEventListener('DOMContentLoaded', async function () {
+            // Load theme preference
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            updateThemeIcon(savedTheme);
+
+            loadFilters();
+            loadStats();
+            loadActivities();
+        });
+
+        // Save filters to localStorage
+        function saveFilters() {
+            const filters = {
+                statsRange: document.getElementById('stats-range').value,
+                statsAfterDate: document.getElementById('stats-after-date').value,
+                statsBeforeDate: document.getElementById('stats-before-date').value,
+                activityRange: document.getElementById('activity-range').value,
+                afterDate: document.getElementById('after-date').value,
+                beforeDate: document.getElementById('before-date').value,
+                activityType: document.getElementById('activity-type').value,
+                gearFilter: document.getElementById('gear-filter').value
+            };
+            localStorage.setItem('strava_filters', JSON.stringify(filters));
+        }
+
+        // Load filters from localStorage
+        function loadFilters() {
+            const savedFilters = localStorage.getItem('strava_filters');
+            if (savedFilters) {
+                const filters = JSON.parse(savedFilters);
+                if (filters.statsRange) document.getElementById('stats-range').value = filters.statsRange;
+                if (filters.statsAfterDate) document.getElementById('stats-after-date').value = filters.statsAfterDate;
+                if (filters.statsBeforeDate) document.getElementById('stats-before-date').value = filters.statsBeforeDate;
+
+                if (filters.activityRange) document.getElementById('activity-range').value = filters.activityRange;
+                if (filters.afterDate) document.getElementById('after-date').value = filters.afterDate;
+                if (filters.beforeDate) document.getElementById('before-date').value = filters.beforeDate;
+                if (filters.activityType) document.getElementById('activity-type').value = filters.activityType;
+                if (filters.gearFilter) document.getElementById('gear-filter').value = filters.gearFilter;
+
+                // Ensure custom date container visibility is correct
+                toggleCustomDates();
+                toggleStatsCustomDates();
+            }
+        }
+
+        function handleStatsRangeChange() {
+            toggleStatsCustomDates();
+            loadStats();
+            saveFilters();
+        }
+
+        function toggleStatsCustomDates() {
+            const range = document.getElementById('stats-range').value;
+            const container = document.getElementById('stats-custom-date-container');
+            if (range === 'custom') {
+                container.classList.remove('d-none');
+            } else {
+                container.classList.add('d-none');
+            }
+        }
+
+        // Theme toggle functionality
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeIcon(newTheme);
+        }
+
+        function updateThemeIcon(theme) {
+            const icon = document.getElementById('theme-icon');
+            if (theme === 'dark') {
+                icon.className = 'fas fa-sun';
+            } else {
+                icon.className = 'fas fa-moon';
+            }
+        }
+
+        function handleActivityRangeChange() {
+            toggleCustomDates();
+            saveFilters();
+            resetAndLoad();
+        }
+
+        function toggleCustomDates() {
+            const range = document.getElementById('activity-range').value;
+            const container = document.getElementById('custom-date-container');
+            if (range === 'custom') {
+                container.classList.remove('d-none');
+            } else {
+                container.classList.add('d-none');
+            }
+        }
+
+        function resetAndLoad() {
+            currentPage = 1;
+            loadActivities();
+        }
+
+
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('activities-container').innerHTML = '';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        async function loadStats() {
+            const loadingEl = document.getElementById('stats-loading');
+            const contentEl = document.getElementById('stats-content');
+
+            loadingEl.style.display = 'block';
+            contentEl.style.opacity = '0.5';
+
+            try {
+                const range = document.getElementById('stats-range').value;
+                let url = `${API_BASE}/stats/summary?range=${range}`;
+
+                if (range === 'custom') {
+                    const after = document.getElementById('stats-after-date').value;
+                    const before = document.getElementById('stats-before-date').value;
+                    if (after) url += `&after=${after}`;
+                    if (before) url += `&before=${before}`;
+                }
+
+                const response = await fetch(url);
+                const stats = await response.json();
+
+                // Populate summary
+                document.getElementById('total-activities').textContent = stats.total.count;
+                document.getElementById('total-distance').textContent = stats.total.distance_km.toLocaleString();
+                document.getElementById('total-time').textContent = stats.total.time_hours.toLocaleString();
+                document.getElementById('no-gear-count').textContent = stats.total.activities_without_gear;
+
+                // Populate type breakdown
+                const typeBody = document.getElementById('type-stats-body');
+                const detailedStats = stats.activity_types_detailed;
+
+                typeBody.innerHTML = Object.entries(detailedStats)
+                    .sort((a, b) => b[1].count - a[1].count) // Sort by count descending
+                    .map(([type, data]) => `
+                        <tr>
+                            <td>
+                                <i class="fas fa-${getActivityIcon(type)} me-2"></i>
+                                ${type === 'TrailRun' ? 'Trail Run' : (type === 'Run' ? 'Road Run' : type)}
+                            </td>
+                            <td class="text-center">${data.count}</td>
+                            <td class="text-center">${data.distance_km.toLocaleString()}</td>
+                            <td class="text-center">${data.time_hours.toLocaleString()}</td>
+                        </tr>
+                    `).join('');
+
+            } catch (error) {
+                console.error('Error loading stats:', error);
+                document.getElementById('type-stats-body').innerHTML =
+                    '<tr><td colspan="4" class="text-center text-danger">Error loading breakdown</td></tr>';
+            } finally {
+                loadingEl.style.display = 'none';
+                contentEl.style.opacity = '1';
+            }
+        }
+
+        async function loadActivities() {
+            showLoading();
+
+            const range = document.getElementById('activity-range').value;
+            const activityType = document.getElementById('activity-type').value;
+            const gearFilter = document.getElementById('gear-filter').value;
+
+            let after = '';
+            let before = '';
+
+            if (range === 'custom') {
+                after = document.getElementById('after-date').value;
+                before = document.getElementById('before-date').value;
+            } else if (range !== 'all') {
+                const now = new Date();
+                if (range === '1w') now.setDate(now.getDate() - 7);
+                else if (range === '1m') now.setMonth(now.getMonth() - 1);
+                else if (range === '3m') now.setMonth(now.getMonth() - 3);
+                else if (range === '1y') now.setFullYear(now.getFullYear() - 1);
+                after = now.toISOString().split('T')[0];
+            }
+
+            let url = `${API_BASE}/activities?page=${currentPage}&per_page=${PER_PAGE}`;
+            if (after) url += `&after=${after}`;
+            if (before) url += `&before=${before}`;
+            if (activityType) url += `&activity_type=${activityType}`;
+            if (gearFilter) url += `&has_gear=${gearFilter}`;
+
+            try {
+                const response = await fetch(url);
+                const result = await response.json();
+
+                // Handle new paginated response structure
+                const activities = result.items || [];
+                const totalPages = result.total_pages || 1;
+                const totalItems = result.total || 0;
+
+                displayActivities(activities);
+                updatePagination(totalPages, totalItems);
+
+            } catch (error) {
+                console.error('Error loading activities:', error);
+                document.getElementById('activities-container').innerHTML =
+                    '<div class="col-12"><div class="alert alert-danger">Error loading activities. Please check your API configuration.</div></div>';
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function updatePagination(totalPages, totalItems) {
+            const paginationContainer = document.getElementById('pagination-container');
+            const pageIndicator = document.getElementById('page-indicator');
+
+            // Clear existing
+            paginationContainer.innerHTML = '';
+
+            if (totalItems === 0) {
+                return;
+            }
+
+            // Helper to create page item
+            const createItem = (label, page, disabled = false, active = false) => {
+                const li = document.createElement('li');
+                li.className = `page-item ${disabled ? 'disabled' : ''} ${active ? 'active' : ''}`;
+                li.innerHTML = `<button class="page-link" onclick="goToPage(${page})">${label}</button>`;
+                return li;
+            };
+
+            const ul = document.createElement('ul');
+            ul.className = 'pagination justify-content-center';
+
+            // First & Prev
+            ul.appendChild(createItem('First', 1, currentPage === 1));
+            ul.appendChild(createItem('Prev', currentPage - 1, currentPage === 1));
+
+            // Page numbers
+            if (totalPages <= 5) {
+                for (let i = 1; i <= totalPages; i++) {
+                    ul.appendChild(createItem(i, i, false, currentPage === i));
+                }
+            } else {
+                // Logic for > 5 pages: First, Current, Next, Last (plus context)
+                // Showing: 1 ... [current-1] [current] [current+1] ... [last]
+
+                // Always show 1
+                // ul.appendChild(createItem(1, 1, false, currentPage === 1));
+
+                // For simplicity and matching user request "first, current, next and last":
+                // We surely render numbers if they are close.
+
+                let startPage, endPage;
+                if (totalPages <= 10) {
+                    // Less than 10 total, just show all to be safe? No, user said > 4 specific logic.
+                    // Let's stick to standard window.
+                    startPage = Math.max(1, currentPage - 1);
+                    endPage = Math.min(totalPages, currentPage + 1);
+                } else {
+                    startPage = Math.max(1, currentPage - 1);
+                    endPage = Math.min(totalPages, currentPage + 1);
+                }
+
+                if (startPage > 1) {
+                    ul.appendChild(createItem('...', currentPage, true));
+                }
+
+                for (let i = startPage; i <= endPage; i++) {
+                    ul.appendChild(createItem(i, i, false, currentPage === i));
+                }
+
+                if (endPage < totalPages) {
+                    ul.appendChild(createItem('...', currentPage, true));
+                }
+            }
+
+            // Next & Last
+            ul.appendChild(createItem('Next', currentPage + 1, currentPage === totalPages));
+            ul.appendChild(createItem('Last', totalPages, currentPage === totalPages));
+
+            paginationContainer.appendChild(ul);
+
+            // Update indicator text
+            const rangeStart = (currentPage - 1) * PER_PAGE + 1;
+            const rangeEnd = Math.min(currentPage * PER_PAGE, totalItems);
+            // document.getElementById('page-info').textContent = `Showing ${rangeStart}-${rangeEnd} of ${totalItems} activities`;
+        }
+
+        function goToPage(page) {
+            if (page < 1 || page === currentPage) return;
+            currentPage = page;
+            loadActivities();
+            window.scrollTo(0, document.getElementById('activities-container').offsetTop - 100);
+        }
+
+
+        function displayActivities(activities) {
+            const container = document.getElementById('activities-container');
+
+            console.log(`Displaying ${activities.length} activities`);
+
+            if (activities.length === 0) {
+                container.innerHTML = '<div class="col-12"><div class="alert alert-info">No activities found.</div></div>';
+                return;
+            }
+
+            // Log gear info for debugging
+            activities.forEach(activity => {
+                if (activity.gear_id) {
+                    console.log(`Activity ${activity.id}: gear_id=${activity.gear_id}, gear_name=${activity.gear_name || 'NOT SET'}`);
+                }
+            });
+
+            container.innerHTML = activities.map(activity => `
+                <div class="col-md-6 col-lg-4 mb-3">
+                    <div class="card activity-card ${activity.gear_id ? 'has-gear' : 'no-gear'}">
+                        <div class="card-body">
+                            <h6 class="card-title">
+                                <i class="fas fa-${getActivityIcon(activity.sport_type)}"></i>
+                                <a href="https://www.strava.com/activities/${activity.id}" target="_blank" rel="noopener noreferrer" class="activity-title-link">
+                                    ${activity.name}
+                                </a>
+                            </h6>
+                            <p class="card-text">
+                                <small class="text-muted">
+                                    ${new Date(activity.start_date).toLocaleDateString()} • 
+                                    ${activity.sport_type === 'TrailRun' ? 'Trail Run' : (activity.sport_type === 'Run' ? 'Road Run' : activity.sport_type)}
+                                </small>
+                            </p>
+                            <div class="row text-center">
+                                <div class="col-4">
+                                    <strong>${(activity.distance / 1000).toFixed(2)}</strong>
+                                    <br><small>km</small>
+                                </div>
+                                <div class="col-4">
+                                    <strong>${Math.floor(activity.moving_time / 60)}</strong>
+                                    <br><small>min</small>
+                                </div>
+                                <div class="col-4">
+                                    <strong>${formatPace(activity.average_speed)}</strong>
+                                    <br><small>min/km</small>
+                                </div>
+                            </div>
+                             ${activity.gear_id ?
+                    `<div class="mt-2"><span class="badge bg-success">Gear: ${activity.gear_name || activity.gear_id}</span></div>` :
+                    `<div class="mt-2"><span class="badge bg-warning">No Gear</span></div>`
+                }
+                            <div class="mt-2">
+                                <button class="btn btn-sm btn-outline-primary" onclick="downloadGPX(${activity.id}, '${activity.name.replace(/'/g, "\\'")}')">
+                                    <i class="fas fa-download"></i> GPX
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getActivityIcon(type) {
+            const icons = {
+                'Run': 'running',
+                'TrailRun': 'mountain',
+                'Ride': 'bicycle',
+                'Walk': 'walking',
+                'Swim': 'swimmer',
+                'Hike': 'hiking'
+            };
+            return icons[type] || 'dumbbell';
+        }
+
+        async function downloadGPX(activityId, activityName) {
+            try {
+                const encodedName = encodeURIComponent(activityName || '');
+                const response = await fetch(`${API_BASE}/activities/${activityId}/download-gpx?activity_name=${encodedName}`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert(`GPX file downloaded: ${result.file_path}`);
+                    // Optionally open the GPX file
+                    window.open(`${API_BASE}/activities/${activityId}/gpx?activity_name=${encodedName}`, '_blank');
+                } else {
+                    alert(`Error: ${result.detail}`);
+                }
+            } catch (error) {
+                console.error('Error downloading GPX:', error);
+                alert('Error downloading GPX file');
+            }
+        }
+
+        function formatPace(speedMps) {
+            if (!speedMps || speedMps <= 0) return "--:--";
+
+            // Speed is in m/s, convert to sec/km
+            const paceSecondsPerKm = 1000 / speedMps;
+
+            const minutes = Math.floor(paceSecondsPerKm / 60);
+            const seconds = Math.round(paceSecondsPerKm % 60);
+
+            // Handle edge case where rounding seconds to 60 happens
+            if (seconds === 60) {
+                return `${minutes + 1}:00`;
+            }
+
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+    </script>
+</body>
+
+</html>
