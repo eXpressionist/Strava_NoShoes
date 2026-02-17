@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   strava-noshoes:
     build: .
@@ -36,12 +34,6 @@ services:
   #   depends_on:
   #     - strava-noshoes
   #   restart: unless-stopped
-
-volumes:
-  strava_data:
-    driver: local
-  strava_logs:
-    driver: local
 
 networks:
   default:
