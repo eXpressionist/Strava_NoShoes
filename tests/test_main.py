@@ -23,6 +23,23 @@ def test_root_endpoint():
     assert "text/html" in response.headers["content-type"]
 
 
+def test_custom_ranges_wait_for_dates_before_loading():
+    """Custom ranges should not fetch all history before dates are selected."""
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "function hasCompleteCustomRange(afterId, beforeId)" in html
+    assert (
+        "if (range === 'custom' && !hasCompleteCustomRange('stats-after-date', "
+        "'stats-before-date'))"
+    ) in html
+    assert (
+        "if (range === 'custom' && !hasCompleteCustomRange('after-date', "
+        "'before-date'))"
+    ) in html
+
+
 def test_api_health_check():
     """Test the API health check endpoint."""
     response = client.get("/api/v1/")

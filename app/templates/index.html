@@ -375,8 +375,14 @@
 
         function handleStatsRangeChange() {
             toggleStatsCustomDates();
-            loadStats();
             saveFilters();
+
+            const range = document.getElementById('stats-range').value;
+            if (range === 'custom' && !hasCompleteCustomRange('stats-after-date', 'stats-before-date')) {
+                return;
+            }
+
+            loadStats();
         }
 
         function toggleStatsCustomDates() {
@@ -387,6 +393,13 @@
             } else {
                 container.classList.add('d-none');
             }
+        }
+
+        function hasCompleteCustomRange(afterId, beforeId) {
+            return Boolean(
+                document.getElementById(afterId).value &&
+                document.getElementById(beforeId).value
+            );
         }
 
         // Theme toggle functionality
@@ -410,6 +423,12 @@
         function handleActivityRangeChange() {
             toggleCustomDates();
             saveFilters();
+
+            const range = document.getElementById('activity-range').value;
+            if (range === 'custom' && !hasCompleteCustomRange('after-date', 'before-date')) {
+                return;
+            }
+
             resetAndLoad();
         }
 
@@ -439,6 +458,11 @@
         }
 
         async function loadStats() {
+            const range = document.getElementById('stats-range').value;
+            if (range === 'custom' && !hasCompleteCustomRange('stats-after-date', 'stats-before-date')) {
+                return;
+            }
+
             const loadingEl = document.getElementById('stats-loading');
             const contentEl = document.getElementById('stats-content');
 
@@ -446,7 +470,6 @@
             contentEl.style.opacity = '0.5';
 
             try {
-                const range = document.getElementById('stats-range').value;
                 let url = `${API_BASE}/stats/summary?range=${range}`;
 
                 if (range === 'custom') {
@@ -494,9 +517,13 @@
         }
 
         async function loadActivities() {
+            const range = document.getElementById('activity-range').value;
+            if (range === 'custom' && !hasCompleteCustomRange('after-date', 'before-date')) {
+                return;
+            }
+
             showLoading();
 
-            const range = document.getElementById('activity-range').value;
             const activityType = document.getElementById('activity-type').value;
             const gearFilter = document.getElementById('gear-filter').value;
 
