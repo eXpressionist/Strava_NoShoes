@@ -981,7 +981,7 @@
                 <a href="https://www.strava.com/activities/${activity.id}" target="_blank" rel="noopener noreferrer" class="calendar-activity ${activity.gear_id ? 'has-gear' : ''}">
                     <i class="fas fa-${getActivityIcon(activity.sport_type)}"></i>
                     ${activity.name}
-                    <span class="calendar-activity-meta">${typeLabel} вЂў ${(activity.distance / 1000).toFixed(2)} km</span>
+                    <span class="calendar-activity-meta">${typeLabel} - ${(activity.distance / 1000).toFixed(2)} km</span>
                 </a>
             `;
         }

@@ -64,6 +64,16 @@ def test_calendar_view_mode_is_available():
     assert "strava_view_mode" in html
 
 
+def test_calendar_activity_meta_uses_ascii_separator():
+    """Calendar activity labels should not render mojibake separators."""
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "вЂў" not in html
+    assert "${typeLabel} - ${(activity.distance / 1000).toFixed(2)} km" in html
+
+
 def test_api_health_check():
     """Test the API health check endpoint."""
     response = client.get("/api/v1/")
