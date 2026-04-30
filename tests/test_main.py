@@ -40,6 +40,30 @@ def test_custom_ranges_wait_for_dates_before_loading():
     ) in html
 
 
+def test_activity_cards_show_weekday_dates():
+    """Activity cards should include weekday-aware date formatting."""
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "function formatActivityDateWithWeekday(dateValue)" in html
+    assert "weekday: 'short'" in html
+    assert "${formatActivityDateWithWeekday(activity.start_date)}" in html
+
+
+def test_calendar_view_mode_is_available():
+    """The activity list should support an optional calendar view."""
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.text
+
+    assert 'id="view-mode"' in html
+    assert 'value="calendar"' in html
+    assert "function displayCalendarActivities(activities" in html
+    assert "calendar-grid" in html
+    assert "strava_view_mode" in html
+
+
 def test_api_health_check():
     """Test the API health check endpoint."""
     response = client.get("/api/v1/")
