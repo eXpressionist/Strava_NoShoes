@@ -51,6 +51,28 @@ def test_activity_cards_show_weekday_dates():
     assert "${formatActivityDateWithWeekday(activity.start_date)}" in html
 
 
+def test_preset_activity_ranges_include_current_day():
+    """Activity requests should convert end dates to exclusive upper bounds."""
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "function toExclusiveBeforeDateKey(dateKey)" in html
+    assert "beforeDate.setDate(beforeDate.getDate() + 1);" in html
+    assert (
+        "url += `&before=${toExclusiveBeforeDateKey(dateBounds.before)}`"
+    ) in html
+
+
+def test_custom_stats_range_includes_end_date():
+    """Custom stats requests should convert end dates to exclusive upper bounds."""
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "if (before) url += `&before=${toExclusiveBeforeDateKey(before)}`;" in html
+
+
 def test_calendar_view_mode_is_available():
     """The activity list should support an optional calendar view."""
     response = client.get("/")

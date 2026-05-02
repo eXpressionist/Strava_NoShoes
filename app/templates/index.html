@@ -587,7 +587,7 @@
                     const after = document.getElementById('stats-after-date').value;
                     const before = document.getElementById('stats-before-date').value;
                     if (after) url += `&after=${after}`;
-                    if (before) url += `&before=${before}`;
+                    if (before) url += `&before=${toExclusiveBeforeDateKey(before)}`;
                 }
 
                 const response = await fetch(url);
@@ -690,10 +690,16 @@
         function buildActivitiesUrl(page, perPage, dateBounds, activityType, gearFilter) {
             let url = `${API_BASE}/activities?page=${page}&per_page=${perPage}`;
             if (dateBounds.after) url += `&after=${dateBounds.after}`;
-            if (dateBounds.before) url += `&before=${dateBounds.before}`;
+            if (dateBounds.before) url += `&before=${toExclusiveBeforeDateKey(dateBounds.before)}`;
             if (activityType) url += `&activity_type=${activityType}`;
             if (gearFilter) url += `&has_gear=${gearFilter}`;
             return url;
+        }
+
+        function toExclusiveBeforeDateKey(dateKey) {
+            const beforeDate = parseDateKey(dateKey);
+            beforeDate.setDate(beforeDate.getDate() + 1);
+            return toDateKey(beforeDate);
         }
 
         async function fetchActivitiesPage(page, perPage, dateBounds, activityType, gearFilter) {
