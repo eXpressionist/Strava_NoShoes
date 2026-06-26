@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.api.routes import router as api_router
 from app.config import settings
+from app.models.database import init_db
 
 from contextlib import asynccontextmanager
 from app.services.bot_service import BotService
@@ -19,7 +20,8 @@ bot_service = BotService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize bot
+    # Startup: Initialize database and bot
+    await init_db()
     await bot_service.initialize()
     yield
     # Shutdown: Stop bot

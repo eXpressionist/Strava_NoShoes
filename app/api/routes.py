@@ -3,27 +3,17 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import FileResponse
-from app.models.strava import Activity, Athlete, Gear, ActivityFilter, GPXDownloadRequest, PaginatedResponse
-from app.services.strava_service import StravaService, StravaAPIError
+from app.models.strava import Activity, Athlete, Gear, ActivityFilter, PaginatedResponse
+from app.services.unified_service import UnifiedActivityService, UnifiedServiceError
 
 router = APIRouter()
-strava_service = StravaService()
+service = UnifiedActivityService()
 
 
 @router.get("/", summary="Health check")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "message": "Strava NoShoes API is running"}
-
-
-@router.get("/athlete", response_model=Athlete, summary="Get athlete information")
-async def get_athlete():
-    """Get the authenticated athlete's information."""
-    try:
-        athlete = await strava_service.get_athlete()
-        return athlete
-    except StravaAPIError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "ok", "message": "Strava NoShoes API is running (Garmin + SQLite)"}
 
 
 @router.get("/activities", response_model=PaginatedResponse, summary="Get athlete activities")
@@ -47,25 +37,17 @@ async def get_activities(
             has_gear=has_gear,
             gear_id=gear_id
         )
-        
-        # Always fetch all matching activities to determine total count for pagination
-        # This might be optimized later with caching or separate count endpoints
-        fetched_activities = await strava_service.get_activities(activity_filter, all_pages=True)
-        
-        # Explicit client-side date filtering (backup for API consistency)
-        if after:
-            # Simple timestamp comparison for robustness
-            cutoff = after.timestamp()
-            fetched_activities = [a for a in fetched_activities if a.start_date.timestamp() > cutoff]
-        
+
+        fetched_activities = await service.get_activities(activity_filter, all_pages=True)
+
         total = len(fetched_activities)
         total_pages = (total + per_page - 1) // per_page
-        
+
         # Apply pagination in memory
         start_idx = (page - 1) * per_page
         end_idx = start_idx + per_page
         paginated_items = fetched_activities[start_idx:end_idx]
-        
+
         return {
             "items": paginated_items,
             "total": total,
@@ -73,27 +55,19 @@ async def get_activities(
             "per_page": per_page,
             "total_pages": total_pages
         }
-    except StravaAPIError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("/activities/{activity_id}", response_model=Activity, summary="Get activity by ID")
-async def get_activity(activity_id: int):
-    """Get detailed information about a specific activity."""
-    try:
-        activity = await strava_service.get_activity_by_id(activity_id)
-        return activity
-    except StravaAPIError as e:
+    except UnifiedServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/activities/no-gear", response_model=List[Activity], summary="Get activities without gear")
-async def get_activities_without_gear():
+async def get_activities_without_gear(
+    after: Optional[datetime] = Query(None, description="Activities after this date")
+):
     """Get all activities that don't have gear assigned."""
     try:
-        activities = await strava_service.get_activities_without_gear()
+        activities = await service.get_activities_without_gear(after=after)
         return activities
-    except StravaAPIError as e:
+    except UnifiedServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -103,37 +77,46 @@ async def get_running_activities(
 ):
     """Get running activities specifically."""
     try:
-        activities = await strava_service.get_running_activities(limit)
+        activities = await service.get_running_activities(limit)
         return activities
-    except StravaAPIError as e:
+    except UnifiedServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/activities/{activity_id}", response_model=Activity, summary="Get activity by ID")
+async def get_activity(activity_id: int):
+    """Get detailed information about a specific activity."""
+    try:
+        activity = await service.get_activity_by_id(activity_id)
+        return activity
+    except UnifiedServiceError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/gear", response_model=List[Gear], summary="Get athlete gear")
 async def get_gear():
-    """Get athlete's gear list."""
+    """Get athlete's gear list (from backup + Garmin)."""
     try:
-        gear = await strava_service.get_athlete_gear()
+        gear = await service.get_athlete_gear()
         return gear
-    except StravaAPIError as e:
+    except UnifiedServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/activities/{activity_id}/download-gpx", summary="Download GPX file")
 async def download_gpx(
     activity_id: int,
-    background_tasks: BackgroundTasks,
     activity_name: Optional[str] = Query(None, description="Activity name for filename")
 ):
     """Download GPX file for an activity."""
     try:
-        file_path = await strava_service.download_gpx(activity_id, activity_name=activity_name)
+        file_path = await service.download_gpx(activity_id, activity_name=activity_name)
         return {
-            "message": f"GPX file downloaded successfully",
+            "message": "GPX file downloaded successfully",
             "file_path": file_path,
             "activity_id": activity_id
         }
-    except StravaAPIError as e:
+    except UnifiedServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -144,14 +127,13 @@ async def get_gpx_file(
 ):
     """Serve the downloaded GPX file."""
     try:
-        # First try to download if not exists
-        file_path = await strava_service.download_gpx(activity_id, activity_name=activity_name)
+        file_path = await service.download_gpx(activity_id, activity_name=activity_name)
         return FileResponse(
             path=file_path,
             media_type='application/gpx+xml',
             filename=os.path.basename(file_path)
         )
-    except StravaAPIError as e:
+    except UnifiedServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="GPX file not found")
@@ -180,24 +162,21 @@ async def get_activity_stats(
                 after = None
                 before = None
 
-        # Fetch all activities for accurate stats
         activity_filter = ActivityFilter(after=after, before=before)
-        activities = await strava_service.get_activities(activity_filter, all_pages=True)
-        
+        activities = await service.get_activities(activity_filter, all_pages=True)
+
         total_activities = len(activities)
         total_distance = sum(activity.distance for activity in activities)
         total_time = sum(activity.moving_time for activity in activities)
         activities_without_gear = len([a for a in activities if a.gear_id is None])
-        
+
         activity_types = {}
         activity_type_details = {}
-        
+
         for activity in activities:
             a_type = activity.sport_type
-            # Count
             activity_types[a_type] = activity_types.get(a_type, 0) + 1
-            
-            # Detailed stats
+
             if a_type not in activity_type_details:
                 activity_type_details[a_type] = {
                     "count": 0,
@@ -206,18 +185,16 @@ async def get_activity_stats(
                     "time_seconds": 0,
                     "time_hours": 0.0
                 }
-            
+
             details = activity_type_details[a_type]
             details["count"] += 1
             details["distance_meters"] += activity.distance
             details["time_seconds"] += activity.moving_time
 
-        # Finalize rounding and conversions
         for a_type, details in activity_type_details.items():
             details["distance_km"] = round(details["distance_meters"] / 1000, 2)
             details["time_hours"] = round(details["time_seconds"] / 3600, 2)
-            # Distance meters and time seconds are already ints/floats
-        
+
         return {
             "total": {
                 "count": total_activities,
@@ -230,5 +207,5 @@ async def get_activity_stats(
             "activity_types_count": activity_types,
             "activity_types_detailed": activity_type_details
         }
-    except StravaAPIError as e:
+    except UnifiedServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
