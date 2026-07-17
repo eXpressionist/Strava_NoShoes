@@ -57,6 +57,7 @@ class ActivityMap(BaseModel):
 
 class Activity(BaseModel):
     """Strava activity model."""
+    source: Optional[str] = None
     resource_state: int
     athlete: Optional[Athlete] = None
     name: str

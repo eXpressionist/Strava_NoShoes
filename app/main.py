@@ -1,14 +1,16 @@
 """Main FastAPI application."""
 
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from fastapi import Request
+import inspect
 import os
 from pathlib import Path
 
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
 from app.api.routes import router as api_router
+from app.api.forecast_routes import router as forecast_router
 from app.config import settings
 from app.models.database import init_db
 
@@ -49,14 +51,30 @@ if os.path.exists("app/static"):
 # Setup templates
 templates = Jinja2Templates(directory="app/templates")
 
+
+def render_template(request: Request, name: str):
+    """Render templates across both supported Starlette calling conventions."""
+    parameters = inspect.signature(templates.TemplateResponse).parameters
+    context = {"request": request}
+    if "request" in parameters:
+        return templates.TemplateResponse(request=request, name=name, context=context)
+    return templates.TemplateResponse(name, context)
+
 # Include API routes
 app.include_router(api_router, prefix="/api/v1", tags=["Strava API"])
+app.include_router(forecast_router, prefix="/api/v1", tags=["Race Forecast"])
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def read_root(request: Request):
     """Serve the main web interface."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return render_template(request, "index.html")
+
+
+@app.get("/race-forecast", response_class=HTMLResponse, include_in_schema=False)
+async def race_forecast_page(request: Request):
+    """Serve the trail race forecast interface."""
+    return render_template(request, "race_forecast.html")
 
 
 @app.get("/health")

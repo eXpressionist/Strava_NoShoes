@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Прогноз трейловой гонки — Strava NoShoes</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { background: #f4f6f8; }
+        .navbar { background: #0d6efd; }
+        .step-card { border: 0; box-shadow: 0 0.2rem 0.8rem rgba(0, 0, 0, .08); }
+        .step-number {
+            display: inline-flex; width: 2rem; height: 2rem; align-items: center;
+            justify-content: center; border-radius: 50%; background: #0d6efd;
+            color: white; font-weight: 700; margin-right: .5rem;
+        }
+        .activity-name { min-width: 230px; }
+        .checkpoint-name { min-width: 180px; }
+        .summary-value { font-size: 1.35rem; font-weight: 700; }
+        .sticky-actions { position: sticky; bottom: 0; background: rgba(244, 246, 248, .95); z-index: 10; }
+        #status-message:empty { display: none; }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/"><i class="fas fa-running"></i> Strava NoShoes</a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link active" href="/race-forecast"><i class="fas fa-mountain"></i> Прогноз гонки</a>
+                <a class="nav-link" href="/"><i class="fas fa-list"></i> Активности</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container py-4">
+        <div class="mb-4">
+            <h1 class="h3 mb-1">Прогноз трейловой гонки</h1>
+            <p class="text-muted mb-0">Выберите длинные трейлы и прошлые гонки, затем загрузите GPX будущей трассы.</p>
+        </div>
+
+        <div id="status-message" class="alert" role="alert"></div>
+
+        <section class="card step-card mb-4">
+            <div class="card-body">
+                <h2 class="h5"><span class="step-number">1</span>Исторические тренировки и гонки</h2>
+                <div class="row g-3 align-items-end my-1">
+                    <div class="col-md-3">
+                        <label class="form-label" for="history-after">С даты</label>
+                        <input class="form-control" id="history-after" type="date">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="history-before">По дату</label>
+                        <input class="form-control" id="history-before" type="date">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="min-distance">От, км</label>
+                        <input class="form-control" id="min-distance" type="number" min="0" step="1" value="20">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="min-elevation">Набор от, м</label>
+                        <input class="form-control" id="min-elevation" type="number" min="0" step="50" value="500">
+                    </div>
+                    <div class="col-md-2 d-grid">
+                        <button class="btn btn-primary" id="load-activities" type="button">
+                            <i class="fas fa-filter"></i> Показать
+                        </button>
+                    </div>
+                </div>
+                <p class="small text-muted">Галочка «Использовать» включает активность в расчёт. Хотя бы одну выбранную активность нужно отметить как гонку.</p>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Использовать</th>
+                                <th>Гонка</th>
+                                <th>Активность</th>
+                                <th>Дата</th>
+                                <th>Дистанция</th>
+                                <th>Набор</th>
+                                <th>Полное время</th>
+                            </tr>
+                        </thead>
+                        <tbody id="activities-body">
+                            <tr><td colspan="7" class="text-muted text-center py-4">Загрузка активностей…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="card step-card mb-4">
+            <div class="card-body">
+                <h2 class="h5"><span class="step-number">2</span>Будущая трасса и контрольные пункты</h2>
+                <div class="row g-3 align-items-end mt-1">
+                    <div class="col-md-8">
+                        <label class="form-label" for="gpx-file">GPX планируемой дистанции</label>
+                        <input class="form-control" id="gpx-file" type="file" accept=".gpx,application/gpx+xml">
+                    </div>
+                    <div class="col-md-4 d-grid">
+                        <button class="btn btn-outline-primary" id="upload-gpx" type="button">
+                            <i class="fas fa-upload"></i> Загрузить и разобрать
+                        </button>
+                    </div>
+                </div>
+
+                <div id="route-summary" class="row g-3 my-2 d-none"></div>
+
+                <div id="checkpoints-section" class="d-none">
+                    <div class="d-flex align-items-center justify-content-between mt-3 mb-2">
+                        <h3 class="h6 mb-0">Контрольные пункты</h3>
+                        <button class="btn btn-sm btn-outline-secondary" id="add-checkpoint" type="button">
+                            <i class="fas fa-plus"></i> Добавить вручную
+                        </button>
+                    </div>
+                    <p id="checkpoint-help" class="small text-muted"></p>
+                    <div class="table-responsive">
+                        <table class="table align-middle">
+                            <thead><tr><th>Название</th><th>Км трассы</th><th>Высота</th><th>Источник</th><th></th></tr></thead>
+                            <tbody id="checkpoints-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="card step-card mb-4">
+            <div class="card-body">
+                <h2 class="h5"><span class="step-number">3</span>Расчёт</h2>
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-5">
+                        <label class="form-label" for="start-time">Дата и время старта</label>
+                        <input class="form-control" id="start-time" type="datetime-local">
+                        <div class="form-text">Если не указывать, покажем длительность без времени суток.</div>
+                    </div>
+                    <div class="col-md-7 d-grid">
+                        <button class="btn btn-success btn-lg" id="calculate" type="button" disabled>
+                            <i class="fas fa-calculator"></i> Рассчитать прогноз
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="results-section" class="card step-card mb-5 d-none">
+            <div class="card-body">
+                <h2 class="h5 mb-3"><i class="fas fa-flag-checkered"></i> Прогноз</h2>
+                <div id="forecast-summary" class="row g-3 mb-4"></div>
+                <div class="table-responsive">
+                    <table class="table table-striped align-middle">
+                        <thead>
+                            <tr><th>Пункт</th><th>Км</th><th>Оптимистично</th><th>Ожидаемо</th><th>Консервативно</th></tr>
+                        </thead>
+                        <tbody id="forecast-body"></tbody>
+                    </table>
+                </div>
+                <p id="forecast-method" class="small text-muted mb-0"></p>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const API_BASE = '/api/v1/race-forecast';
+        let activities = [];
+        let route = null;
+        let checkpoints = [];
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('load-activities').addEventListener('click', loadActivities);
+            document.getElementById('upload-gpx').addEventListener('click', uploadGpx);
+            document.getElementById('add-checkpoint').addEventListener('click', addCheckpoint);
+            document.getElementById('calculate').addEventListener('click', calculateForecast);
+            loadActivities();
+        });
+
+        async function loadActivities() {
+            const button = document.getElementById('load-activities');
+            setBusy(button, true, 'Загрузка…');
+            const params = new URLSearchParams({
+                min_distance_km: document.getElementById('min-distance').value || '0',
+                min_elevation_gain_m: document.getElementById('min-elevation').value || '0'
+            });
+            const after = document.getElementById('history-after').value;
+            const before = document.getElementById('history-before').value;
+            if (after) params.set('after', `${after}T00:00:00`);
+            if (before) {
+                const exclusive = new Date(`${before}T00:00:00`);
+                exclusive.setDate(exclusive.getDate() + 1);
+                params.set('before', localIso(exclusive));
+            }
+            try {
+                const response = await fetch(`${API_BASE}/activities?${params}`);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить активности');
+                activities = data;
+                renderActivities();
+                clearStatus();
+            } catch (error) {
+                activities = [];
+                renderActivities();
+                showStatus(error.message, 'danger');
+            } finally {
+                setBusy(button, false, '<i class="fas fa-filter"></i> Показать');
+            }
+        }
+
+        function renderActivities() {
+            const body = document.getElementById('activities-body');
+            if (!activities.length) {
+                body.innerHTML = '<tr><td colspan="7" class="text-muted text-center py-4">Подходящих TrailRun не найдено.</td></tr>';
+                return;
+            }
+            body.innerHTML = activities.map((activity, index) => `
+                <tr>
+                    <td><input class="form-check-input use-activity" type="checkbox" data-index="${index}" ${activity.suggested_race ? 'checked' : ''}></td>
+                    <td><input class="form-check-input race-activity" type="checkbox" data-index="${index}" ${activity.suggested_race ? 'checked' : ''}></td>
+                    <td class="activity-name">${escapeHtml(activity.name)}${activity.suggested_race ? ' <span class="badge text-bg-info">похоже на гонку</span>' : ''}</td>
+                    <td>${new Date(activity.start_date).toLocaleDateString()}</td>
+                    <td>${activity.distance_km.toFixed(1)} км</td>
+                    <td>${Math.round(activity.elevation_gain_m)} м</td>
+                    <td>${formatDuration(activity.elapsed_time)}</td>
+                </tr>`).join('');
+            document.querySelectorAll('.use-activity, .race-activity').forEach(input => {
+                input.addEventListener('change', event => {
+                    if (event.target.classList.contains('race-activity') && event.target.checked) {
+                        document.querySelector(`.use-activity[data-index="${event.target.dataset.index}"]`).checked = true;
+                    }
+                });
+            });
+        }
+
+        async function uploadGpx() {
+            const fileInput = document.getElementById('gpx-file');
+            if (!fileInput.files.length) return showStatus('Выберите GPX-файл.', 'warning');
+            const button = document.getElementById('upload-gpx');
+            setBusy(button, true, 'Разбираем…');
+            const form = new FormData();
+            form.append('file', fileInput.files[0]);
+            try {
+                const response = await fetch(`${API_BASE}/gpx`, { method: 'POST', body: form });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || 'Не удалось разобрать GPX');
+                route = data;
+                checkpoints = data.checkpoints.map(item => ({ ...item }));
+                renderRoute();
+                clearStatus();
+                document.getElementById('calculate').disabled = false;
+            } catch (error) {
+                showStatus(error.message, 'danger');
+            } finally {
+                setBusy(button, false, '<i class="fas fa-upload"></i> Загрузить и разобрать');
+            }
+        }
+
+        function renderRoute() {
+            const summary = document.getElementById('route-summary');
+            summary.classList.remove('d-none');
+            summary.innerHTML = [
+                ['Маршрут', escapeHtml(route.name)],
+                ['Дистанция', `${route.distance_km.toFixed(2)} км`],
+                ['Набор', `${Math.round(route.elevation_gain_m)} м`],
+                ['Сброс', `${Math.round(route.elevation_loss_m)} м`]
+            ].map(([label, value]) => `<div class="col-6 col-lg-3"><div class="border rounded p-3 h-100"><div class="small text-muted">${label}</div><div class="summary-value">${value}</div></div></div>`).join('');
+            document.getElementById('checkpoints-section').classList.remove('d-none');
+            document.getElementById('checkpoint-help').textContent = checkpoints.length
+                ? 'Пункты извлечены из GPX. Проверьте названия и километраж; всё можно исправить.'
+                : 'В GPX не найдены именованные контрольные пункты. Добавьте их вручную.';
+            renderCheckpoints();
+        }
+
+        function syncCheckpointsFromTable() {
+            document.querySelectorAll('#checkpoints-body tr').forEach(row => {
+                const index = Number(row.dataset.index);
+                checkpoints[index].name = row.querySelector('.checkpoint-name').value.trim();
+                checkpoints[index].distance_km = Number(row.querySelector('.checkpoint-distance').value);
+            });
+        }
+
+        function renderCheckpoints() {
+            const body = document.getElementById('checkpoints-body');
+            if (!checkpoints.length) {
+                body.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Добавьте первый контрольный пункт.</td></tr>';
+                return;
+            }
+            body.innerHTML = checkpoints.map((checkpoint, index) => `
+                <tr data-index="${index}">
+                    <td><input class="form-control checkpoint-name" maxlength="120" value="${escapeAttribute(checkpoint.name)}"></td>
+                    <td><input class="form-control checkpoint-distance" type="number" min="0" max="${route.distance_km}" step="0.01" value="${Number(checkpoint.distance_km).toFixed(2)}"></td>
+                    <td>${checkpoint.elevation_m == null ? '—' : `${Math.round(checkpoint.elevation_m)} м`}</td>
+                    <td><span class="badge text-bg-${checkpoint.source === 'gpx' ? 'primary' : 'secondary'}">${checkpoint.source === 'gpx' ? 'GPX' : 'вручную'}</span></td>
+                    <td><button class="btn btn-sm btn-outline-danger" type="button" onclick="removeCheckpoint(${index})" aria-label="Удалить"><i class="fas fa-trash"></i></button></td>
+                </tr>`).join('');
+        }
+
+        function addCheckpoint() {
+            syncCheckpointsFromTable();
+            checkpoints.push({ name: `КП ${checkpoints.length + 1}`, distance_km: 0, elevation_m: null, source: 'manual' });
+            renderCheckpoints();
+        }
+
+        function removeCheckpoint(index) {
+            syncCheckpointsFromTable();
+            checkpoints.splice(index, 1);
+            renderCheckpoints();
+        }
+
+        async function calculateForecast() {
+            if (!route) return showStatus('Сначала загрузите GPX.', 'warning');
+            syncCheckpointsFromTable();
+            const selected = [...document.querySelectorAll('.use-activity:checked')].map(input => {
+                const index = Number(input.dataset.index);
+                const activity = activities[index];
+                const race = document.querySelector(`.race-activity[data-index="${index}"]`).checked;
+                return { activity_id: activity.id, source: activity.source, is_race: race };
+            });
+            if (!selected.length) return showStatus('Выберите хотя бы одну историческую активность.', 'warning');
+            if (!selected.some(item => item.is_race)) return showStatus('Отметьте хотя бы одну выбранную активность как гонку.', 'warning');
+            if (checkpoints.some(item => !item.name || !Number.isFinite(item.distance_km))) {
+                return showStatus('Проверьте названия и километраж контрольных пунктов.', 'warning');
+            }
+
+            const startValue = document.getElementById('start-time').value;
+            const payload = {
+                route_id: route.route_id,
+                activities: selected,
+                checkpoints: checkpoints.map(item => ({
+                    name: item.name,
+                    distance_km: item.distance_km,
+                    latitude: item.latitude || null,
+                    longitude: item.longitude || null
+                })),
+                start_time: startValue ? new Date(startValue).toISOString() : null
+            };
+            const button = document.getElementById('calculate');
+            setBusy(button, true, 'Считаем…');
+            try {
+                const response = await fetch(`${API_BASE}/calculate`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(formatApiError(data.detail));
+                renderForecast(data);
+                clearStatus();
+            } catch (error) {
+                showStatus(error.message, 'danger');
+            } finally {
+                setBusy(button, false, '<i class="fas fa-calculator"></i> Рассчитать прогноз');
+            }
+        }
+
+        function renderForecast(result) {
+            const labels = { high: 'высокая', medium: 'средняя', low: 'низкая' };
+            document.getElementById('forecast-summary').innerHTML = [
+                ['Ожидаемый финиш', formatDuration(result.expected_finish_seconds)],
+                ['В движении', formatDuration(result.moving_time_seconds)],
+                ['Остановки', formatDuration(result.stop_time_seconds)],
+                ['Уверенность', `${labels[result.confidence] || result.confidence} (±${result.uncertainty_percent}%)`]
+            ].map(([label, value]) => `<div class="col-6 col-lg-3"><div class="border rounded p-3 h-100"><div class="small text-muted">${label}</div><div class="summary-value">${value}</div></div></div>`).join('');
+            document.getElementById('forecast-body').innerHTML = result.checkpoints.map(item => `
+                <tr>
+                    <td>${escapeHtml(item.name)}</td><td>${item.distance_km.toFixed(2)}</td>
+                    <td>${formatForecastValue(item.optimistic_seconds, item.optimistic_at)}</td>
+                    <td><strong>${formatForecastValue(item.expected_seconds, item.expected_at)}</strong></td>
+                    <td>${formatForecastValue(item.conservative_seconds, item.conservative_at)}</td>
+                </tr>`).join('');
+            document.getElementById('forecast-method').textContent = `Использовано активностей: ${result.activities_used}, из них гонок: ${result.races_used}. ${result.method}.`;
+            document.getElementById('results-section').classList.remove('d-none');
+            document.getElementById('results-section').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function formatForecastValue(seconds, dateValue) {
+            const duration = formatDuration(seconds);
+            return dateValue ? `${duration}<br><span class="small text-muted">${new Date(dateValue).toLocaleString()}</span>` : duration;
+        }
+
+        function formatDuration(totalSeconds) {
+            const seconds = Math.max(0, Math.round(totalSeconds || 0));
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            return `${hours}:${String(minutes).padStart(2, '0')}`;
+        }
+
+        function localIso(date) {
+            const pad = value => String(value).padStart(2, '0');
+            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T00:00:00`;
+        }
+
+        function setBusy(button, busy, label) {
+            button.disabled = busy;
+            button.innerHTML = label;
+        }
+
+        function showStatus(message, type) {
+            const status = document.getElementById('status-message');
+            status.className = `alert alert-${type}`;
+            status.textContent = message;
+            status.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function clearStatus() { document.getElementById('status-message').textContent = ''; }
+        function formatApiError(detail) {
+            if (Array.isArray(detail)) return detail.map(item => item.msg).join('; ');
+            return detail || 'Ошибка расчёта';
+        }
+        function escapeHtml(value) {
+            const div = document.createElement('div'); div.textContent = value ?? ''; return div.innerHTML;
+        }
+        function escapeAttribute(value) {
+            return escapeHtml(value).replace(/"/g, '&quot;');
+        }
+    </script>
+</body>
+
+</html>

@@ -91,6 +91,7 @@ class GarminService:
                 gear_id = str(gear_list[0]) if gear_list else None
 
         return Activity(
+            source="garmin",
             resource_state=2,
             athlete=None,
             name=data.get("activityName", "Unnamed Activity"),

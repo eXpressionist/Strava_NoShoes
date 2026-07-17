@@ -8,6 +8,7 @@ Combines data from two sources:
 The bot and REST API use this service exclusively.
 """
 
+import json
 import logging
 from datetime import datetime
 from typing import List, Optional
@@ -96,15 +97,20 @@ class UnifiedActivityService:
         """Get activity by ID. Try SQLite first, then Garmin."""
         await self._ensure_db()
 
-        # Try SQLite
-        async with async_session() as session:
-            result = await session.execute(
-                select(ActivityDB).where(ActivityDB.source_id == str(activity_id))
-            )
-            db_activity = result.scalar_one_or_none()
+        db_activity = None
+        if source in (None, "strava"):
+            async with async_session() as session:
+                query = select(ActivityDB).where(ActivityDB.source_id == str(activity_id))
+                if source:
+                    query = query.where(ActivityDB.source == source)
+                result = await session.execute(query)
+                db_activity = result.scalar_one_or_none()
 
         if db_activity:
             return self._db_to_model(db_activity)
+
+        if source == "strava":
+            raise UnifiedServiceError(f"Strava activity {activity_id} was not found")
 
         # Try Garmin
         try:
@@ -221,7 +227,14 @@ class UnifiedActivityService:
 
     def _db_to_model(self, db: ActivityDB) -> Activity:
         """Convert DB record to Pydantic Activity model."""
+        workout_type = None
+        if db.raw_data:
+            try:
+                workout_type = json.loads(db.raw_data).get("workout_type")
+            except (json.JSONDecodeError, TypeError):
+                pass
         return Activity(
+            source=db.source,
             resource_state=2,
             athlete=None,
             name=db.name,
@@ -231,6 +244,7 @@ class UnifiedActivityService:
             total_elevation_gain=db.total_elevation_gain or 0.0,
             type=db.activity_type or db.sport_type,
             sport_type=db.sport_type,
+            workout_type=workout_type,
             id=int(db.source_id),
             start_date=db.start_date,
             start_date_local=db.start_date_local,
