@@ -5,7 +5,8 @@
 
 - ключи Strava API и Telegram;
 - порт `8001` на хосте;
-- каталоги `data-secondary/` и `logs-secondary/`;
+- Docker volumes `strava-noshoes-secondary-data` и
+  `strava-noshoes-secondary-logs`;
 - файлы обновлённых Strava-токенов и состояния Telegram-бота.
 
 ## Настройка
@@ -59,3 +60,8 @@ docker compose --profile secondary logs -f strava-noshoes-secondary
 ```bash
 docker compose --profile secondary stop strava-noshoes-secondary
 ```
+
+Именованные volumes используются вместо каталогов хоста, чтобы контейнерный
+пользователь мог создавать GPX и обновлять токены без ошибок прав доступа.
+Обычная остановка или пересоздание контейнера данные не удаляет. Не запускайте
+`docker compose down -v`, если хотите их сохранить.

@@ -34,8 +34,9 @@ RUN poetry config virtualenvs.create false \
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p /app/data/gpx
+# Create writable mount points before volumes are attached. Empty named volumes
+# inherit these ownership settings on their first use.
+RUN mkdir -p /app/data/gpx /app/logs
 
 # Create non-root user
 RUN adduser --disabled-password --gecos '' appuser \

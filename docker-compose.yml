@@ -37,8 +37,8 @@ services:
     env_file:
       - .env.secondary
     volumes:
-      - ./data-secondary:/app/data
-      - ./logs-secondary:/app/logs
+      - strava-noshoes-secondary-data:/app/data
+      - strava-noshoes-secondary-logs:/app/logs
 
   # Optional: Add a reverse proxy (uncomment if needed)
   # nginx:
@@ -57,3 +57,9 @@ services:
 networks:
   default:
     name: strava-noshoes-network
+
+volumes:
+  strava-noshoes-secondary-data:
+    name: strava-noshoes-secondary-data
+  strava-noshoes-secondary-logs:
+    name: strava-noshoes-secondary-logs
