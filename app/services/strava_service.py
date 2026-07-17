@@ -15,6 +15,9 @@ import gpxpy
 import gpxpy.gpx
 
 
+_TOKEN_REFRESH_LOCKS: Dict[str, asyncio.Lock] = {}
+
+
 class StravaAPIError(Exception):
     """Custom exception for Strava API errors."""
     pass
@@ -28,6 +31,10 @@ class StravaService:
         self.client_id = settings.strava_client_id
         self.client_secret = settings.strava_client_secret
         self.token_file = settings.strava_token_file
+        refresh_lock_key = f"{Path(self.token_file).resolve()}::{self.client_id}"
+        self._refresh_lock = _TOKEN_REFRESH_LOCKS.setdefault(
+            refresh_lock_key, asyncio.Lock()
+        )
         
         # Initialize tokens from settings (defaults)
         self.access_token = settings.strava_access_token
@@ -121,7 +128,12 @@ class StravaService:
                 if e.response.status_code == 401:
                     # Force one refresh and retry. Any second HTTP error is
                     # converted to StravaAPIError instead of leaking a traceback.
-                    await self._refresh_access_token()
+                    failed_access_token = headers["Authorization"].removeprefix(
+                        "Bearer "
+                    )
+                    await self._refresh_access_token(
+                        failed_access_token=failed_access_token
+                    )
                     headers = await self._get_headers()
                     retry_response = await client.request(
                         method=method,
@@ -155,59 +167,81 @@ class StravaService:
             except httpx.RequestError as e:
                 raise StravaAPIError(f"Strava network error: {str(e)}") from e
     
-    async def _refresh_access_token(self) -> None:
-        """Refresh the access token using refresh token."""
-        if not self.refresh_token:
-            raise StravaAPIError(
-                "Strava refresh token is not configured. Authorize this container "
-                "and set its own REFRESH_TOKEN."
+    async def _refresh_access_token(
+        self, failed_access_token: Optional[str] = None
+    ) -> None:
+        """Refresh once, sharing the result across concurrent service calls."""
+        async with self._refresh_lock:
+            # Several StravaService instances are used by the web UI, forecast
+            # and bot. Another instance may have refreshed and persisted the
+            # token while this coroutine was waiting for the lock.
+            self._load_tokens()
+            token_is_fresh = bool(
+                self.access_token
+                and self.expires_at
+                and self.expires_at >= time.time() + 3600
             )
-        if not self.client_id or not self.client_secret:
-            raise StravaAPIError(
-                "Strava CLIENT_ID or CLIENT_SECRET is not configured for this container."
-            )
-        
-        url = "https://www.strava.com/oauth/token"
-        data = {
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "refresh_token": self.refresh_token,
-            "grant_type": "refresh_token"
-        }
-        
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(url, data=data)
-                response.raise_for_status()
-                token_data = response.json()
-                
-                self.access_token = token_data["access_token"]
-                self.refresh_token = token_data["refresh_token"]
-                self.expires_at = token_data["expires_at"]
-                
-                # Update settings (syncing with settings object if needed)
-                settings.strava_access_token = self.access_token
-                settings.strava_refresh_token = self.refresh_token
-                settings.strava_token_expires_at = self.expires_at
-                
-                # Persist to file
-                self._save_tokens()
-                
-            except httpx.HTTPStatusError as exc:
+            if failed_access_token is None and token_is_fresh:
+                return
+            if (
+                failed_access_token is not None
+                and token_is_fresh
+                and self.access_token != failed_access_token
+            ):
+                return
+
+            if not self.refresh_token:
                 raise StravaAPIError(
-                    f"Strava token refresh failed (HTTP {exc.response.status_code}): "
-                    f"{self._response_error_detail(exc.response)}. Re-authorize this "
-                    "athlete for this Strava API application."
-                ) from exc
-            except httpx.RequestError as exc:
+                    "Strava refresh token is not configured. Authorize this container "
+                    "and set its own REFRESH_TOKEN."
+                )
+            if not self.client_id or not self.client_secret:
                 raise StravaAPIError(
-                    f"Strava token refresh network error: {str(exc)}"
-                ) from exc
-            except (KeyError, ValueError) as exc:
-                raise StravaAPIError(
-                    "Strava token response is missing required fields. Re-authorize "
-                    "this athlete."
-                ) from exc
+                    "Strava CLIENT_ID or CLIENT_SECRET is not configured for this "
+                    "container."
+                )
+
+            url = "https://www.strava.com/oauth/token"
+            data = {
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "refresh_token": self.refresh_token,
+                "grant_type": "refresh_token",
+            }
+
+            async with httpx.AsyncClient() as client:
+                try:
+                    response = await client.post(url, data=data)
+                    response.raise_for_status()
+                    token_data = response.json()
+
+                    self.access_token = token_data["access_token"]
+                    self.refresh_token = token_data["refresh_token"]
+                    self.expires_at = token_data["expires_at"]
+
+                    # Update settings (syncing with settings object if needed)
+                    settings.strava_access_token = self.access_token
+                    settings.strava_refresh_token = self.refresh_token
+                    settings.strava_token_expires_at = self.expires_at
+
+                    # Persist to file so the other service instances reuse it.
+                    self._save_tokens()
+
+                except httpx.HTTPStatusError as exc:
+                    raise StravaAPIError(
+                        f"Strava token refresh failed (HTTP {exc.response.status_code}): "
+                        f"{self._response_error_detail(exc.response)}. Re-authorize this "
+                        "athlete for this Strava API application."
+                    ) from exc
+                except httpx.RequestError as exc:
+                    raise StravaAPIError(
+                        f"Strava token refresh network error: {str(exc)}"
+                    ) from exc
+                except (KeyError, ValueError) as exc:
+                    raise StravaAPIError(
+                        "Strava token response is missing required fields. Re-authorize "
+                        "this athlete."
+                    ) from exc
 
     @staticmethod
     def _response_error_detail(response: httpx.Response) -> str:

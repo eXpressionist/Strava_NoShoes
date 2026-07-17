@@ -1,6 +1,8 @@
 """Ensure all user-facing runtime paths use the live Strava API."""
 
+import asyncio
 import json
+import time
 
 import httpx
 import pytest
@@ -87,3 +89,54 @@ async def test_second_401_is_reported_as_strava_auth_error(tmp_path, monkeypatch
 
     with pytest.raises(StravaAPIError, match="refreshed access token"):
         await service._make_request("GET", "/athlete")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_services_refresh_shared_token_only_once(
+    tmp_path, monkeypatch
+):
+    token_file = tmp_path / "shared-tokens.json"
+    monkeypatch.setattr(settings, "strava_client_id", "shared-client")
+    monkeypatch.setattr(settings, "strava_client_secret", "shared-secret")
+    monkeypatch.setattr(settings, "strava_access_token", "expired-access")
+    monkeypatch.setattr(settings, "strava_refresh_token", "initial-refresh")
+    monkeypatch.setattr(settings, "strava_token_expires_at", 0)
+    monkeypatch.setattr(settings, "strava_token_file", str(token_file))
+
+    refresh_count = 0
+
+    class FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, *args, **kwargs):
+            nonlocal refresh_count
+            refresh_count += 1
+            await asyncio.sleep(0)
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "shared-new-access",
+                    "refresh_token": "shared-new-refresh",
+                    "expires_at": int(time.time()) + 21_600,
+                },
+                request=httpx.Request("POST", "https://www.strava.com/oauth/token"),
+            )
+
+    monkeypatch.setattr(
+        "app.services.strava_service.httpx.AsyncClient", FakeAsyncClient
+    )
+    first_service = StravaService()
+    second_service = StravaService()
+
+    await asyncio.gather(
+        first_service._ensure_valid_token(),
+        second_service._ensure_valid_token(),
+    )
+
+    assert refresh_count == 1
+    assert first_service.access_token == "shared-new-access"
+    assert second_service.access_token == "shared-new-access"
