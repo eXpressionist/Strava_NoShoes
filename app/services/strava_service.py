@@ -45,6 +45,16 @@ class StravaService:
             try:
                 with open(self.token_file, "r") as f:
                     data = json.load(f)
+                    token_client_id = data.get("client_id")
+                    if (
+                        token_client_id is not None
+                        and str(token_client_id) != str(self.client_id)
+                    ):
+                        print(
+                            f"Ignoring tokens from {self.token_file}: "
+                            "they belong to another Strava client"
+                        )
+                        return
                     self.access_token = data.get("access_token", self.access_token)
                     self.refresh_token = data.get("refresh_token", self.refresh_token)
                     self.expires_at = data.get("expires_at", self.expires_at)
@@ -57,6 +67,7 @@ class StravaService:
         try:
             with open(self.token_file, "w") as f:
                 json.dump({
+                    "client_id": self.client_id,
                     "access_token": self.access_token,
                     "refresh_token": self.refresh_token,
                     "expires_at": self.expires_at

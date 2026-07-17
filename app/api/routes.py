@@ -16,6 +16,15 @@ async def health_check():
     return {"status": "ok", "message": "Strava NoShoes API is running (Strava API)"}
 
 
+@router.get("/athlete", response_model=Athlete, summary="Get connected Strava athlete")
+async def get_connected_athlete():
+    """Return the athlete identity associated with this container's OAuth token."""
+    try:
+        return await service.get_athlete()
+    except StravaAPIError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/activities", response_model=PaginatedResponse, summary="Get athlete activities")
 async def get_activities(
     before: Optional[datetime] = Query(None, description="Activities before this date"),

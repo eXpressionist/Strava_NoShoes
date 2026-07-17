@@ -1,10 +1,6 @@
 x-strava-service: &strava-service
     build: .
     image: strava-noshoes:local
-    environment:
-      APP_HOST: 0.0.0.0
-      APP_PORT: 8000
-      APP_DEBUG: "false"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -21,6 +17,14 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      APP_DEBUG: "false"
+      STRAVA_TOKEN_FILE: /app/data/strava_tokens.json
+      BOT_STATE_FILE: /app/data/bot_state.json
+      GPX_STORAGE_PATH: /app/data/gpx
+      DATABASE_URL: sqlite:////app/data/strava_noshoes.db
     volumes:
       - /home/NoShoes/data:/app/data
       - /home/NoShoes/logs:/app/logs
@@ -36,6 +40,14 @@ services:
       - "8001:8000"
     env_file:
       - .env.secondary
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      APP_DEBUG: "false"
+      STRAVA_TOKEN_FILE: /app/data/strava_tokens-secondary.json
+      BOT_STATE_FILE: /app/data/bot_state-secondary.json
+      GPX_STORAGE_PATH: /app/data/gpx-secondary
+      DATABASE_URL: sqlite:////app/data/strava_noshoes-secondary.db
     volumes:
       - /home/NoShoes2/data:/app/data
       - /home/NoShoes2/logs:/app/logs
@@ -57,9 +69,3 @@ services:
 networks:
   default:
     name: strava-noshoes-network
-
-volumes:
-  strava-noshoes-secondary-data:
-    name: strava-noshoes-secondary-data
-  strava-noshoes-secondary-logs:
-    name: strava-noshoes-secondary-logs

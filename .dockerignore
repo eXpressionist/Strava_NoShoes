@@ -8,6 +8,11 @@ __pycache__
 .mypy_cache
 .env
 .env.*
+*.db
+*.sqlite
+*.sqlite3
+strava_tokens*.json
+bot_state*.json
 data
 data-secondary
 logs
