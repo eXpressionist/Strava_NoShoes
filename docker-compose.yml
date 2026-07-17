@@ -22,8 +22,8 @@ services:
     env_file:
       - .env
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - /home/NoShoes/data:/app/data
+      - /home/NoShoes/logs:/app/logs
 
   # Optional second instance with independent Strava/Telegram credentials.
   # Start it with:
@@ -37,8 +37,8 @@ services:
     env_file:
       - .env.secondary
     volumes:
-      - strava-noshoes-secondary-data:/app/data
-      - strava-noshoes-secondary-logs:/app/logs
+      - /home/NoShoes2/data:/app/data
+      - /home/NoShoes2/logs:/app/logs
 
   # Optional: Add a reverse proxy (uncomment if needed)
   # nginx:
