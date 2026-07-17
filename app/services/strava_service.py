@@ -100,7 +100,7 @@ class StravaService:
         endpoint: str, 
         params: Optional[Dict[str, Any]] = None,
         json_data: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+    ) -> Any:
         """Make an authenticated request to Strava API."""
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         headers = await self._get_headers()
@@ -119,31 +119,53 @@ class StravaService:
                 return response.json()
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 401:
-                    # Try to refresh token
-                    if await self._refresh_access_token():
-                        # Retry the request with new token
-                        headers = await self._get_headers()
-                        response = await client.request(
-                            method=method,
-                            url=url,
-                            headers=headers,
-                            params=params,
-                            json=json_data,
-                            timeout=30.0
-                        )
-                        response.raise_for_status()
-                        return response.json()
-                    else:
-                        raise StravaAPIError("Authentication failed. Please re-authenticate.")
+                    # Force one refresh and retry. Any second HTTP error is
+                    # converted to StravaAPIError instead of leaking a traceback.
+                    await self._refresh_access_token()
+                    headers = await self._get_headers()
+                    retry_response = await client.request(
+                        method=method,
+                        url=url,
+                        headers=headers,
+                        params=params,
+                        json=json_data,
+                        timeout=30.0
+                    )
+                    try:
+                        retry_response.raise_for_status()
+                    except httpx.HTTPStatusError as retry_error:
+                        status = retry_error.response.status_code
+                        if status == 401:
+                            raise StravaAPIError(
+                                "Strava rejected the refreshed access token (401). "
+                                "Authorize this container separately and verify that "
+                                "CLIENT_ID, CLIENT_SECRET and REFRESH_TOKEN belong to "
+                                "the same Strava application and athlete."
+                            ) from retry_error
+                        raise StravaAPIError(
+                            f"Strava API request failed after token refresh (HTTP {status}): "
+                            f"{self._response_error_detail(retry_error.response)}"
+                        ) from retry_error
+                    return retry_response.json()
                 else:
-                    raise StravaAPIError(f"API request failed: {e.response.status_code} - {e.response.text}")
+                    raise StravaAPIError(
+                        f"Strava API request failed (HTTP {e.response.status_code}): "
+                        f"{self._response_error_detail(e.response)}"
+                    ) from e
             except httpx.RequestError as e:
-                raise StravaAPIError(f"Request error: {str(e)}")
+                raise StravaAPIError(f"Strava network error: {str(e)}") from e
     
-    async def _refresh_access_token(self) -> bool:
+    async def _refresh_access_token(self) -> None:
         """Refresh the access token using refresh token."""
         if not self.refresh_token:
-            return False
+            raise StravaAPIError(
+                "Strava refresh token is not configured. Authorize this container "
+                "and set its own REFRESH_TOKEN."
+            )
+        if not self.client_id or not self.client_secret:
+            raise StravaAPIError(
+                "Strava CLIENT_ID or CLIENT_SECRET is not configured for this container."
+            )
         
         url = "https://www.strava.com/oauth/token"
         data = {
@@ -171,9 +193,43 @@ class StravaService:
                 # Persist to file
                 self._save_tokens()
                 
-                return True
-            except (httpx.HTTPStatusError, httpx.RequestError, KeyError):
-                return False
+            except httpx.HTTPStatusError as exc:
+                raise StravaAPIError(
+                    f"Strava token refresh failed (HTTP {exc.response.status_code}): "
+                    f"{self._response_error_detail(exc.response)}. Re-authorize this "
+                    "athlete for this Strava API application."
+                ) from exc
+            except httpx.RequestError as exc:
+                raise StravaAPIError(
+                    f"Strava token refresh network error: {str(exc)}"
+                ) from exc
+            except (KeyError, ValueError) as exc:
+                raise StravaAPIError(
+                    "Strava token response is missing required fields. Re-authorize "
+                    "this athlete."
+                ) from exc
+
+    @staticmethod
+    def _response_error_detail(response: httpx.Response) -> str:
+        """Return a short OAuth/API error without exposing credentials."""
+        try:
+            payload = response.json()
+        except ValueError:
+            return "no error details"
+        if not isinstance(payload, dict):
+            return "no error details"
+        message = str(payload.get("message") or "request rejected")
+        errors = payload.get("errors")
+        if isinstance(errors, list) and errors:
+            safe_errors = []
+            for item in errors[:3]:
+                if not isinstance(item, dict):
+                    continue
+                parts = [item.get("resource"), item.get("field"), item.get("code")]
+                safe_errors.append("/".join(str(part) for part in parts if part))
+            if safe_errors:
+                message = f"{message} ({', '.join(safe_errors)})"
+        return message[:300]
     
     async def get_athlete(self) -> Athlete:
         """Get the authenticated athlete's information."""
