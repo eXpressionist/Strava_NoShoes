@@ -121,6 +121,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.secondary
 .venv
 env/
 venv/
@@ -161,6 +162,8 @@ cython_debug/
 # Project specific
 data/
 logs/
+data-secondary/
+logs-secondary/
 *.db
 *.sqlite
 *.sqlite3
@@ -176,6 +179,3 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
-
-# Docker
-.dockerignore
