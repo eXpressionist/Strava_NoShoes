@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
-    # Strava API Configuration (kept for backup migration, will be removed after)
+    # Strava API Configuration (primary activity data source)
     strava_client_id: str = Field(default="", description="Strava API Client ID")
     strava_client_secret: str = Field(default="", description="Strava API Client Secret")
     strava_access_token: str = Field(default="", description="Strava API Access Token")
@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     strava_token_file: str = Field(default="data/strava_tokens.json", description="Path to store tokens")
     strava_api_base_url: str = Field(default="https://www.strava.com/api/v3", description="Strava API Base URL")
 
-    # Garmin Connect Configuration
+    # Legacy Garmin settings are retained only so existing .env files remain valid.
+    # User-facing runtime paths do not use them.
     garmin_email: str = Field(default="", description="Garmin Connect email/login")
     garmin_password: str = Field(default="", description="Garmin Connect password")
     garmin_token_store: str = Field(default="data/garmin_tokens", description="Directory to store Garmin session tokens")
@@ -41,8 +42,7 @@ class Settings(BaseSettings):
     # Database
     database_url: str = Field(default="sqlite:///./strava_noshoes.db", description="Database URL")
 
-    # Migration cutoff date — activities before this date come from SQLite backup,
-    # activities after come from Garmin API
+    # Legacy migration setting retained for compatibility with existing .env files.
     migration_cutoff: str = Field(default="2025-06-30", description="Date cutoff for Strava->Garmin migration (YYYY-MM-DD)")
 
     class Config:

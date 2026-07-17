@@ -26,10 +26,10 @@ SAMPLE_GPX = b"""<?xml version="1.0" encoding="UTF-8"?>
 
 
 class FakeActivityService:
-    async def get_activity_by_id(self, activity_id: int, source: str):
+    async def get_activity_by_id(self, activity_id: int):
         return SimpleNamespace(
             id=activity_id,
-            source=source,
+            source="strava",
             name="Historical race",
             distance=30_000,
             total_elevation_gain=1_500,

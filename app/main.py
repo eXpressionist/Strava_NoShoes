@@ -12,7 +12,6 @@ from fastapi.templating import Jinja2Templates
 from app.api.routes import router as api_router
 from app.api.forecast_routes import router as forecast_router
 from app.config import settings
-from app.models.database import init_db
 
 from contextlib import asynccontextmanager
 from app.services.bot_service import BotService
@@ -22,8 +21,7 @@ bot_service = BotService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize database and bot
-    await init_db()
+    # Startup: initialize the Telegram bot. Activity data comes from Strava API.
     await bot_service.initialize()
     yield
     # Shutdown: Stop bot

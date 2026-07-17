@@ -4,16 +4,16 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import FileResponse
 from app.models.strava import Activity, Athlete, Gear, ActivityFilter, PaginatedResponse
-from app.services.unified_service import UnifiedActivityService, UnifiedServiceError
+from app.services.strava_service import StravaAPIError, StravaService
 
 router = APIRouter()
-service = UnifiedActivityService()
+service = StravaService()
 
 
 @router.get("/", summary="Health check")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "message": "Strava NoShoes API is running (Garmin + SQLite)"}
+    return {"status": "ok", "message": "Strava NoShoes API is running (Strava API)"}
 
 
 @router.get("/activities", response_model=PaginatedResponse, summary="Get athlete activities")
@@ -55,7 +55,7 @@ async def get_activities(
             "per_page": per_page,
             "total_pages": total_pages
         }
-    except UnifiedServiceError as e:
+    except StravaAPIError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -67,7 +67,7 @@ async def get_activities_without_gear(
     try:
         activities = await service.get_activities_without_gear(after=after)
         return activities
-    except UnifiedServiceError as e:
+    except StravaAPIError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -79,7 +79,7 @@ async def get_running_activities(
     try:
         activities = await service.get_running_activities(limit)
         return activities
-    except UnifiedServiceError as e:
+    except StravaAPIError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -89,7 +89,7 @@ async def get_activity(activity_id: int):
     try:
         activity = await service.get_activity_by_id(activity_id)
         return activity
-    except UnifiedServiceError as e:
+    except StravaAPIError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
@@ -99,7 +99,7 @@ async def get_gear():
     try:
         gear = await service.get_athlete_gear()
         return gear
-    except UnifiedServiceError as e:
+    except StravaAPIError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -116,7 +116,7 @@ async def download_gpx(
             "file_path": file_path,
             "activity_id": activity_id
         }
-    except UnifiedServiceError as e:
+    except StravaAPIError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -133,7 +133,7 @@ async def get_gpx_file(
             media_type='application/gpx+xml',
             filename=os.path.basename(file_path)
         )
-    except UnifiedServiceError as e:
+    except StravaAPIError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="GPX file not found")
@@ -207,5 +207,5 @@ async def get_activity_stats(
             "activity_types_count": activity_types,
             "activity_types_detailed": activity_type_details
         }
-    except UnifiedServiceError as e:
+    except StravaAPIError as e:
         raise HTTPException(status_code=400, detail=str(e))

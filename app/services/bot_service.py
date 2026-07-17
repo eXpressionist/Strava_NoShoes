@@ -12,7 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
-from app.services.unified_service import UnifiedActivityService
+from app.services.strava_service import StravaService
 from app.utils.gpx_cleanup import cleanup_all_gpx_files
 import re
 
@@ -27,7 +27,7 @@ class BotService:
     def __init__(self):
         self.token = settings.bot_api_token
         self.state_file = settings.bot_state_file
-        self.activity_service = UnifiedActivityService()
+        self.activity_service = StravaService()
         self.scheduler = AsyncIOScheduler()
         self.application = None
 
@@ -60,7 +60,7 @@ class BotService:
         self._save_state()
         await update.message.reply_text(
             f"Hello! I am ready to check your activities.\n"
-            f"Data source: Garmin Connect + local backup.\n\n"
+            f"Data source: Strava API.\n\n"
             f"Use /check to run a manual check.\n"
             f"Use /schedule HH:MM to set a daily check time (e.g., /schedule 20:00)."
         )
@@ -123,14 +123,12 @@ class BotService:
         await update.message.reply_text("Daily schedule stopped.")
 
     async def handle_activity_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle messages containing Garmin or Strava activity links."""
+        """Handle messages containing Strava activity links."""
         message_text = update.message.text
 
-        # Try Garmin link first
-        garmin_pattern = r'https://connect\.garmin\.com/modern/activity/(\d+)'
         strava_pattern = r'https://www\.strava\.com/activities/(\d+)'
 
-        match = re.search(garmin_pattern, message_text) or re.search(strava_pattern, message_text)
+        match = re.search(strava_pattern, message_text)
 
         if not match:
             return
@@ -239,7 +237,7 @@ class BotService:
             # Get activity details first
             activity = await self.activity_service.get_activity_by_id(activity_id)
 
-            # Download GPX via unified service
+            # Download GPX through Strava streams.
             gpx_path = await self.activity_service.download_gpx(
                 activity_id,
                 activity_name=activity.name
@@ -318,8 +316,7 @@ class BotService:
             time_msg = f" (last {days_back} days)" if days_back else ""
             message = f"⚠️ Found {len(activities)} activities without gear{time_msg}:\n\n"
             for activity in activities[:10]:
-                # Use Garmin link for new activities
-                link = f"https://connect.garmin.com/modern/activity/{activity.id}"
+                link = f"https://www.strava.com/activities/{activity.id}"
                 message += f"• <a href='{link}'>{activity.name}</a> ({activity.start_date.strftime('%Y-%m-%d')})\n"
 
             if len(activities) > 10:
@@ -366,7 +363,7 @@ class BotService:
         self.application.add_handler(CommandHandler("stop", self.stop_command))
         self.application.add_handler(CommandHandler("gpx", self.gpx_command))
 
-        # Message handler for activity links (Garmin + legacy Strava)
+        # Message handler for Strava activity links.
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_activity_link)
         )
@@ -403,7 +400,7 @@ class BotService:
             self._schedule_job(h, m)
 
         await self.application.updater.start_polling()
-        logger.info("Telegram bot started (data source: Garmin Connect + SQLite backup).")
+        logger.info("Telegram bot started (data source: Strava API).")
 
     async def shutdown(self):
         """Shutdown the bot."""

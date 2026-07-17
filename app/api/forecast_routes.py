@@ -12,7 +12,7 @@ from app.models.forecast import (
     RoutePreview,
 )
 from app.services.forecast_service import ForecastService, ForecastServiceError
-from app.services.unified_service import UnifiedServiceError
+from app.services.strava_service import StravaAPIError
 
 
 router = APIRouter(prefix="/race-forecast")
@@ -34,7 +34,7 @@ async def get_forecast_activities(
             min_distance_km=min_distance_km,
             min_elevation_gain_m=min_elevation_gain_m,
         )
-    except (ForecastServiceError, UnifiedServiceError) as exc:
+    except (ForecastServiceError, StravaAPIError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -56,5 +56,5 @@ async def calculate_forecast(request: ForecastRequest):
     """Calculate elapsed-time ranges for checkpoints and finish."""
     try:
         return await service.calculate(request)
-    except (ForecastServiceError, UnifiedServiceError) as exc:
+    except (ForecastServiceError, StravaAPIError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

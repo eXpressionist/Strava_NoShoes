@@ -205,7 +205,10 @@ class StravaService:
             data = await self._make_request("GET", "/athlete/activities", params=params)
             all_activities_data = data
             
-        activities = [Activity(**activity_data) for activity_data in all_activities_data]
+        activities = [
+            Activity(source="strava", **activity_data)
+            for activity_data in all_activities_data
+        ]
         
         # Populate gear names using the new method
         if activities:
@@ -247,7 +250,7 @@ class StravaService:
     async def get_activity_by_id(self, activity_id: int) -> Activity:
         """Get detailed information about a specific activity."""
         data = await self._make_request("GET", f"/activities/{activity_id}")
-        return Activity(**data)
+        return Activity(source="strava", **data)
     
     async def get_gear_by_id(self, gear_id: str) -> Optional[Gear]:
         """Get detailed gear information by ID."""
