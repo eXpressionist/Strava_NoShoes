@@ -1,23 +1,35 @@
-"""Ensure all user-facing runtime paths use the live Strava API."""
+"""Ensure runtime source selection and Strava token sharing are stable."""
 
 import asyncio
 import json
 import time
+from datetime import date
 
 import httpx
 import pytest
 
 from app.api.forecast_routes import service as forecast_api_service
-from app.api.routes import service as api_service
+from app.api.routes import athlete_service, service as api_service
 from app.config import settings
 from app.main import bot_service
 from app.services.strava_service import StravaAPIError, StravaService
+from app.services.unified_service import UnifiedActivityService
 
 
-def test_runtime_services_use_strava_api():
-    assert isinstance(api_service, StravaService)
-    assert isinstance(forecast_api_service.activities, StravaService)
-    assert isinstance(bot_service.activity_service, StravaService)
+def test_runtime_services_use_scheduled_cutover():
+    assert isinstance(api_service, UnifiedActivityService)
+    assert isinstance(forecast_api_service.activities, UnifiedActivityService)
+    assert isinstance(bot_service.activity_service, UnifiedActivityService)
+    assert isinstance(athlete_service, StravaService)
+
+
+def test_cutoff_day_is_inclusive(monkeypatch):
+    monkeypatch.setattr(settings, "migration_cutoff", "2026-10-15")
+    service = UnifiedActivityService()
+
+    assert service.strava_is_live(date(2026, 10, 15)) is True
+    assert service.strava_is_live(date(2026, 10, 16)) is False
+    assert service._cutoff.isoformat() == "2026-10-16T00:00:00"
 
 
 def test_tokens_for_another_strava_client_are_ignored(tmp_path, monkeypatch):

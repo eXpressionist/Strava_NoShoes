@@ -7,7 +7,7 @@ Also downloads streams (GPS/HR/cadence) for GPX reconstruction.
 Usage:
     python -m scripts.backup_strava
 
-Run this BEFORE Strava API becomes unavailable (deadline: June 30, 2025).
+The operation is idempotent and is also used by the in-process daily scheduler.
 """
 
 import asyncio
@@ -15,18 +15,16 @@ import json
 import logging
 import sys
 import os
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
+from datetime import date, datetime
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from app.config import settings
 from app.models.database import (
     ActivityDB, GearDB, ActivityStreamDB,
-    engine, async_session, init_db
+    async_session, init_db
 )
 from app.services.strava_service import StravaService, StravaAPIError
 
@@ -40,8 +38,13 @@ logger = logging.getLogger(__name__)
 class StravaBackup:
     """Backup all Strava data to SQLite."""
 
-    def __init__(self):
+    def __init__(self, streams_limit: int | None = None):
         self.strava = StravaService()
+        self.streams_limit = (
+            settings.strava_backup_streams_per_run
+            if streams_limit is None
+            else streams_limit
+        )
         self.stats = {
             "activities_saved": 0,
             "activities_skipped": 0,
@@ -62,13 +65,23 @@ class StravaBackup:
         await init_db()
         logger.info("Database tables created/verified.")
 
-        # Step 1: Backup gear
-        await self.backup_gear()
+        cutoff = datetime.strptime(settings.migration_cutoff, "%Y-%m-%d").date()
+        if date.today() > cutoff:
+            logger.info("Strava cutoff %s has passed; backup skipped", cutoff)
+            return self.stats
 
-        # Step 2: Backup all activities
+        # Activity summaries are cheap to enumerate and are always refreshed.
         await self.backup_activities()
+        if self.stats["errors"]:
+            raise RuntimeError(self.stats["errors"][-1])
 
-        # Step 3: Backup streams for activities with GPS
+        # Gear is collected after activities so every referenced gear ID is known.
+        await self.backup_gear()
+        if self.stats["errors"]:
+            raise RuntimeError(self.stats["errors"][-1])
+        await self._update_gear_names()
+
+        # Streams are filled incrementally to remain below Strava read limits.
         await self.backup_streams()
 
         # Summary
@@ -79,16 +92,37 @@ class StravaBackup:
         logger.info(f"Gear saved: {self.stats['gear_saved']}")
         logger.info(f"Streams saved: {self.stats['streams_saved']}")
         if self.stats['errors']:
-            logger.warning(f"Errors: {len(self.stats['errors'])}")
+            logger.error(f"Errors: {len(self.stats['errors'])}")
             for err in self.stats['errors'][:10]:
-                logger.warning(f"  - {err}")
+                logger.error(f"  - {err}")
         logger.info("=" * 60)
+        if self.stats["errors"]:
+            raise RuntimeError("Strava backup completed with errors")
+        return self.stats
 
     async def backup_gear(self):
         """Backup all gear from Strava."""
         logger.info("--- Backing up gear ---")
         try:
             gear_list = await self.strava.get_athlete_gear()
+            known_ids = {gear.id for gear in gear_list}
+            async with async_session() as session:
+                result = await session.execute(
+                    select(ActivityDB.gear_id)
+                    .where(
+                        ActivityDB.source == "strava",
+                        ActivityDB.gear_id.is_not(None),
+                    )
+                    .distinct()
+                )
+                referenced_ids = {gear_id for gear_id in result.scalars().all() if gear_id}
+
+            # get_athlete_gear only discovers gear referenced by recent activities.
+            # Fetch older/retired items that are present in the complete backup too.
+            for gear_id in sorted(referenced_ids - known_ids):
+                gear = await self.strava.get_gear_by_id(gear_id)
+                if gear:
+                    gear_list.append(gear)
             logger.info(f"Found {len(gear_list)} gear items")
 
             async with async_session() as session:
@@ -161,49 +195,67 @@ class StravaBackup:
                         )
                         existing = result.scalar_one_or_none()
 
-                        if existing:
-                            self.stats["activities_skipped"] += 1
-                            continue
-
                         # Parse dates
                         start_date = self._parse_date(activity_data.get("start_date", ""))
                         start_date_local = self._parse_date(activity_data.get("start_date_local", ""))
 
-                        # Create DB record
-                        db_activity = ActivityDB(
-                            source="strava",
-                            source_id=activity_id,
-                            name=activity_data.get("name", "Unnamed"),
-                            sport_type=activity_data.get("sport_type", activity_data.get("type", "Unknown")),
-                            activity_type=activity_data.get("type"),
-                            distance=activity_data.get("distance", 0.0),
-                            moving_time=activity_data.get("moving_time", 0),
-                            elapsed_time=activity_data.get("elapsed_time", 0),
-                            total_elevation_gain=activity_data.get("total_elevation_gain", 0.0),
-                            average_speed=activity_data.get("average_speed", 0.0),
-                            max_speed=activity_data.get("max_speed", 0.0),
-                            average_heartrate=activity_data.get("average_heartrate"),
-                            max_heartrate=activity_data.get("max_heartrate"),
-                            average_cadence=activity_data.get("average_cadence"),
-                            start_date=start_date,
-                            start_date_local=start_date_local,
-                            timezone=activity_data.get("timezone", ""),
-                            start_lat=self._get_latlng(activity_data, "start_latlng", 0),
-                            start_lng=self._get_latlng(activity_data, "start_latlng", 1),
-                            end_lat=self._get_latlng(activity_data, "end_latlng", 0),
-                            end_lng=self._get_latlng(activity_data, "end_latlng", 1),
-                            gear_id=activity_data.get("gear_id"),
-                            elev_high=activity_data.get("elev_high"),
-                            elev_low=activity_data.get("elev_low"),
-                            trainer=activity_data.get("trainer", False),
-                            manual=activity_data.get("manual", False),
-                            private=activity_data.get("private", False),
-                            has_heartrate=activity_data.get("has_heartrate", False),
-                            has_gps_data=bool(activity_data.get("start_latlng")),
-                            raw_data=json.dumps(activity_data, default=str),
-                        )
-                        session.add(db_activity)
-                        self.stats["activities_saved"] += 1
+                        values = {
+                            "name": activity_data.get("name", "Unnamed"),
+                            "sport_type": activity_data.get(
+                                "sport_type", activity_data.get("type", "Unknown")
+                            ),
+                            "activity_type": activity_data.get("type"),
+                            "distance": activity_data.get("distance", 0.0),
+                            "moving_time": activity_data.get("moving_time", 0),
+                            "elapsed_time": activity_data.get("elapsed_time", 0),
+                            "total_elevation_gain": activity_data.get(
+                                "total_elevation_gain", 0.0
+                            ),
+                            "average_speed": activity_data.get("average_speed", 0.0),
+                            "max_speed": activity_data.get("max_speed", 0.0),
+                            "average_heartrate": activity_data.get("average_heartrate"),
+                            "max_heartrate": activity_data.get("max_heartrate"),
+                            "average_cadence": activity_data.get("average_cadence"),
+                            "start_date": start_date,
+                            "start_date_local": start_date_local,
+                            "timezone": activity_data.get("timezone", ""),
+                            "start_lat": self._get_latlng(
+                                activity_data, "start_latlng", 0
+                            ),
+                            "start_lng": self._get_latlng(
+                                activity_data, "start_latlng", 1
+                            ),
+                            "end_lat": self._get_latlng(
+                                activity_data, "end_latlng", 0
+                            ),
+                            "end_lng": self._get_latlng(
+                                activity_data, "end_latlng", 1
+                            ),
+                            "gear_id": activity_data.get("gear_id"),
+                            "elev_high": activity_data.get("elev_high"),
+                            "elev_low": activity_data.get("elev_low"),
+                            "trainer": activity_data.get("trainer", False),
+                            "manual": activity_data.get("manual", False),
+                            "private": activity_data.get("private", False),
+                            "has_heartrate": activity_data.get(
+                                "has_heartrate", False
+                            ),
+                            "has_gps_data": bool(activity_data.get("start_latlng")),
+                            "raw_data": json.dumps(activity_data, default=str),
+                        }
+                        if existing:
+                            for field, value in values.items():
+                                setattr(existing, field, value)
+                            self.stats["activities_skipped"] += 1
+                        else:
+                            session.add(
+                                ActivityDB(
+                                    source="strava",
+                                    source_id=activity_id,
+                                    **values,
+                                )
+                            )
+                            self.stats["activities_saved"] += 1
 
                     await session.commit()
 
@@ -217,16 +269,11 @@ class StravaBackup:
             except StravaAPIError as e:
                 logger.error(f"Strava API error on page {page}: {e}")
                 self.stats["errors"].append(f"Activities page {page}: {e}")
-                # Wait and retry once
-                await asyncio.sleep(5)
-                page += 1
+                break
             except Exception as e:
                 logger.error(f"Unexpected error on page {page}: {e}")
                 self.stats["errors"].append(f"Activities page {page}: {e}")
-                page += 1
-
-        # Populate gear names from cache
-        await self._update_gear_names()
+                break
 
     async def backup_streams(self):
         """Backup GPS streams for activities that have GPS data."""
@@ -238,8 +285,8 @@ class StravaBackup:
                 select(ActivityDB).where(
                     ActivityDB.source == "strava",
                     ActivityDB.has_gps_data == True,
-                    ActivityDB.gpx_file_path == None,  # No GPX saved yet
-                ).order_by(ActivityDB.start_date.desc())
+                    ~exists().where(ActivityStreamDB.activity_id == ActivityDB.id),
+                ).order_by(ActivityDB.start_date.desc()).limit(self.streams_limit)
             )
             activities = result.scalars().all()
 
@@ -253,6 +300,11 @@ class StravaBackup:
 
                 if "latlng" not in streams:
                     logger.info(f"    No GPS data available, skipping.")
+                    async with async_session() as session:
+                        stored = await session.get(ActivityDB, activity.id)
+                        if stored:
+                            stored.has_gps_data = False
+                            await session.commit()
                     continue
 
                 latlngs = streams["latlng"]["data"]
@@ -306,7 +358,9 @@ class StravaBackup:
             except StravaAPIError as e:
                 logger.warning(f"    Error fetching streams: {e}")
                 self.stats["errors"].append(f"Stream {activity.source_id}: {e}")
-                await asyncio.sleep(5)
+                # Do not skip ahead: the next scheduled run resumes from the
+                # first activity that still has no stored stream points.
+                break
             except Exception as e:
                 logger.error(f"    Unexpected error: {e}")
                 self.stats["errors"].append(f"Stream {activity.source_id}: {e}")
@@ -359,5 +413,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
     asyncio.run(main())

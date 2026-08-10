@@ -1,12 +1,21 @@
-"""Garmin Connect service using python-garminconnect library."""
+"""Garmin Connect service using the community python-garminconnect library."""
 
+from __future__ import annotations
+
+import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from garminconnect import Garmin, GarminConnectAuthenticationError
+try:
+    from garminconnect import Garmin, GarminConnectAuthenticationError
+except ImportError:  # Strava remains usable before cutover in minimal installs.
+    Garmin = None
+
+    class GarminConnectAuthenticationError(Exception):
+        pass
 
 from app.config import settings
 from app.models.strava import Activity, Gear  # Reuse existing Pydantic models
@@ -36,26 +45,18 @@ class GarminService:
 
         if not self.email or not self.password:
             raise GarminAPIError("Garmin credentials not configured. Set GARMIN_EMAIL and GARMIN_PASSWORD.")
+        if Garmin is None:
+            raise GarminAPIError("garminconnect dependency is not installed")
 
         try:
             self.client = Garmin(self.email, self.password)
 
-            # Try to load saved session tokens
             token_dir = Path(self.token_store)
-            if token_dir.exists():
-                try:
-                    self.client.login(token_dir)
-                    logger.info("Garmin: restored session from saved tokens")
-                    return
-                except Exception:
-                    logger.info("Garmin: saved session expired, re-authenticating...")
-
-            # Full login
-            self.client.login()
-            # Save session for reuse
             token_dir.mkdir(parents=True, exist_ok=True)
-            self.client.garth.dump(str(token_dir))
-            logger.info("Garmin: authenticated and saved session tokens")
+            # Current garminconnect versions load, refresh and persist tokens
+            # when the token-store path is passed to login.
+            await asyncio.to_thread(self.client.login, str(token_dir))
+            logger.info("Garmin: authenticated using persistent session tokens")
 
         except GarminConnectAuthenticationError as e:
             self.client = None
@@ -66,17 +67,18 @@ class GarminService:
 
     def _garmin_activity_to_model(self, data: Dict[str, Any]) -> Activity:
         """Convert Garmin activity dict to our Activity Pydantic model."""
-        # Garmin uses different field names than Strava
+        # Activity-list and activity-detail endpoints use different nesting.
+        summary = data.get("summaryDTO", data)
         activity_id = data.get("activityId", 0)
-        start_time_str = data.get("startTimeLocal", "") or data.get("startTimeGMT", "")
-        start_time_gmt = data.get("startTimeGMT", "") or start_time_str
+        start_time_str = summary.get("startTimeLocal", "") or summary.get("startTimeGMT", "")
+        start_time_gmt = summary.get("startTimeGMT", "") or start_time_str
 
         # Parse datetime
         start_local = self._parse_garmin_datetime(start_time_str)
         start_utc = self._parse_garmin_datetime(start_time_gmt)
 
         # Map Garmin activity type to a unified type
-        activity_type = data.get("activityType", {})
+        activity_type = data.get("activityType") or data.get("activityTypeDTO", {})
         type_key = activity_type.get("typeKey", "other") if isinstance(activity_type, dict) else "other"
         sport_type = self._map_garmin_sport_type(type_key)
 
@@ -95,10 +97,10 @@ class GarminService:
             resource_state=2,
             athlete=None,
             name=data.get("activityName", "Unnamed Activity"),
-            distance=data.get("distance", 0.0) or 0.0,
-            moving_time=int(data.get("movingDuration", 0) or data.get("duration", 0) or 0),
-            elapsed_time=int(data.get("duration", 0) or 0),
-            total_elevation_gain=data.get("elevationGain", 0.0) or 0.0,
+            distance=summary.get("distance", 0.0) or 0.0,
+            moving_time=int(summary.get("movingDuration", 0) or summary.get("duration", 0) or 0),
+            elapsed_time=int(summary.get("duration", 0) or 0),
+            total_elevation_gain=summary.get("elevationGain", 0.0) or 0.0,
             type=sport_type,
             sport_type=sport_type,
             id=activity_id,
@@ -111,22 +113,22 @@ class GarminService:
             comment_count=0,
             athlete_count=1,
             photo_count=0,
-            trainer=data.get("isIndoor", False) or False,
+            trainer=summary.get("isIndoor", False) or False,
             commute=False,
-            manual=data.get("isManualActivity", False) or False,
-            private=data.get("isPrivate", False) or False,
+            manual=metadata.get("isManualActivity", False) or False,
+            private=metadata.get("isPrivate", False) or False,
             visibility="everyone",
             flagged=False,
             gear_id=gear_id,
             gear_name=gear_name,
-            average_speed=data.get("averageSpeed", 0.0) or 0.0,
-            max_speed=data.get("maxSpeed", 0.0) or 0.0,
-            average_cadence=data.get("averageRunningCadenceInStepsPerMinute") or data.get("averageCadence"),
-            has_heartrate=bool(data.get("averageHR")),
-            average_heartrate=data.get("averageHR"),
-            max_heartrate=data.get("maxHR"),
-            elev_high=data.get("elevationMax"),
-            elev_low=data.get("elevationMin"),
+            average_speed=summary.get("averageSpeed", 0.0) or 0.0,
+            max_speed=summary.get("maxSpeed", 0.0) or 0.0,
+            average_cadence=summary.get("averageRunningCadenceInStepsPerMinute") or summary.get("averageCadence"),
+            has_heartrate=bool(summary.get("averageHR")),
+            average_heartrate=summary.get("averageHR"),
+            max_heartrate=summary.get("maxHR"),
+            elev_high=summary.get("elevationMax"),
+            elev_low=summary.get("elevationMin"),
             pr_count=0,
             total_photo_count=0,
             has_kudoed=False,
@@ -181,9 +183,13 @@ class GarminService:
                 # Use date-based search
                 start_date = after.strftime("%Y-%m-%d") if after else "2000-01-01"
                 end_date = before.strftime("%Y-%m-%d") if before else datetime.now().strftime("%Y-%m-%d")
-                raw_activities = self.client.get_activities_by_date(start_date, end_date)
+                raw_activities = await asyncio.to_thread(
+                    self.client.get_activities_by_date, start_date, end_date
+                )
             else:
-                raw_activities = self.client.get_activities(start, limit)
+                raw_activities = await asyncio.to_thread(
+                    self.client.get_activities, start, limit
+                )
 
             activities = [self._garmin_activity_to_model(a) for a in raw_activities]
 
@@ -207,8 +213,10 @@ class GarminService:
         await self._ensure_connected()
 
         try:
-            data = self.client.get_activity(activity_id)
-            return self._garmin_activity_to_model(data)
+            data = await asyncio.to_thread(self.client.get_activity, activity_id)
+            activity = self._garmin_activity_to_model(data)
+            await self._populate_gear_names([activity])
+            return activity
         except Exception as e:
             raise GarminAPIError(f"Failed to fetch activity {activity_id}: {e}")
 
@@ -222,40 +230,83 @@ class GarminService:
         return [a for a in activities if not a.gear_id]
 
     async def get_athlete_gear(self) -> List[Gear]:
-        """Get gear list from Garmin."""
+        """Return gear observed on recent Garmin activities."""
         await self._ensure_connected()
 
         try:
-            # Garmin gear endpoint
-            gear_data = self.client.get_gear_defaults()
-            gear_list = []
-
-            if isinstance(gear_data, list):
-                for item in gear_data:
-                    gear = Gear(
-                        id=str(item.get("gearPk", "")),
-                        primary=item.get("isDefault", False),
-                        name=item.get("displayName", "Unknown"),
-                        resource_state=2,
-                        retired=not item.get("isActive", True),
-                        distance=item.get("totalDistance", 0.0),
-                    )
-                    gear_list.append(gear)
-                    self._gear_cache[gear.id] = gear.name
-
-            return gear_list
+            raw_activities = await asyncio.to_thread(self.client.get_activities, 0, 100)
+            gear_by_id: Dict[str, Gear] = {}
+            for raw in raw_activities:
+                activity_id = raw.get("activityId")
+                if not activity_id:
+                    continue
+                payload = await asyncio.to_thread(
+                    self.client.get_activity_gear, activity_id
+                )
+                for item in self._gear_items(payload):
+                    gear = self._gear_model(item)
+                    if gear:
+                        gear_by_id[gear.id] = gear
+                        self._gear_cache[gear.id] = gear.name
+            return list(gear_by_id.values())
         except Exception as e:
             logger.warning(f"Failed to fetch Garmin gear: {e}")
             return []
 
     async def _populate_gear_names(self, activities: List[Activity]) -> None:
-        """Populate gear names for activities."""
-        if not self._gear_cache:
-            await self.get_athlete_gear()
+        """Use Garmin's activity-specific gear endpoint.
 
+        Activity summaries do not reliably include gear. Treating that field as
+        authoritative would therefore notify for every Garmin activity.
+        """
         for activity in activities:
-            if activity.gear_id and activity.gear_id in self._gear_cache:
-                activity.gear_name = self._gear_cache[activity.gear_id]
+            if activity.gear_id:
+                activity.gear_name = self._gear_cache.get(activity.gear_id)
+                continue
+            payload = await asyncio.to_thread(
+                self.client.get_activity_gear, activity.id
+            )
+            items = self._gear_items(payload)
+            if not items:
+                continue
+            gear = self._gear_model(items[0])
+            if gear:
+                activity.gear_id = gear.id
+                activity.gear_name = gear.name
+                self._gear_cache[gear.id] = gear.name
+
+    @staticmethod
+    def _gear_items(payload: Any) -> List[Dict[str, Any]]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if isinstance(payload, dict):
+            for key in ("gearDTOs", "activityGear", "gear"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+            if any(key in payload for key in ("uuid", "gearUUID", "gearPk")):
+                return [payload]
+        return []
+
+    @staticmethod
+    def _gear_model(item: Dict[str, Any]) -> Optional[Gear]:
+        gear_id = item.get("uuid") or item.get("gearUUID") or item.get("gearPk")
+        if gear_id is None:
+            return None
+        name = (
+            item.get("customMakeModel")
+            or item.get("displayName")
+            or item.get("gearName")
+            or "Unknown"
+        )
+        return Gear(
+            id=str(gear_id),
+            primary=bool(item.get("isDefault", False)),
+            name=str(name),
+            resource_state=2,
+            retired=not item.get("isActive", True),
+            distance=item.get("totalDistance", 0.0),
+        )
 
     async def download_gpx(self, activity_id: int, save_path: Optional[str] = None, activity_name: Optional[str] = None) -> str:
         """Download GPX file for an activity from Garmin."""
@@ -284,7 +335,11 @@ class GarminService:
 
         try:
             # Garmin provides direct GPX download
-            gpx_data = self.client.download_activity(activity_id, dl_fmt=self.client.ActivityDownloadFormat.GPX)
+            gpx_data = await asyncio.to_thread(
+                self.client.download_activity,
+                activity_id,
+                self.client.ActivityDownloadFormat.GPX,
+            )
 
             with open(file_path, "wb") as f:
                 f.write(gpx_data)

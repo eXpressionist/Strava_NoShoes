@@ -14,6 +14,7 @@ from app.api.forecast_routes import router as forecast_router
 from app.config import settings
 
 from contextlib import asynccontextmanager
+from app.services.backup_service import backup_scheduler
 from app.services.bot_service import BotService
 
 # Bot service instance
@@ -21,10 +22,11 @@ bot_service = BotService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: initialize the Telegram bot. Activity data comes from Strava API.
+    # Keep the API responsive while the resumable backup runs in the background.
+    await backup_scheduler.start()
     await bot_service.initialize()
     yield
-    # Shutdown: Stop bot
+    await backup_scheduler.shutdown()
     await bot_service.shutdown()
 
 # Create FastAPI app

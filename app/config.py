@@ -1,11 +1,15 @@
 """Application configuration using Pydantic Settings."""
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False
+    )
 
     # Strava API Configuration (primary activity data source)
     strava_client_id: str = Field(default="", description="Strava API Client ID")
@@ -16,8 +20,7 @@ class Settings(BaseSettings):
     strava_token_file: str = Field(default="data/strava_tokens.json", description="Path to store tokens")
     strava_api_base_url: str = Field(default="https://www.strava.com/api/v3", description="Strava API Base URL")
 
-    # Legacy Garmin settings are retained only so existing .env files remain valid.
-    # User-facing runtime paths do not use them.
+    # Garmin becomes the live activity source after the Strava cutoff.
     garmin_email: str = Field(default="", description="Garmin Connect email/login")
     garmin_password: str = Field(default="", description="Garmin Connect password")
     garmin_token_store: str = Field(default="data/garmin_tokens", description="Directory to store Garmin session tokens")
@@ -42,14 +45,29 @@ class Settings(BaseSettings):
     # Database
     database_url: str = Field(default="sqlite:///./strava_noshoes.db", description="Database URL")
 
-    # Legacy migration setting retained for compatibility with existing .env files.
-    migration_cutoff: str = Field(default="2025-06-30", description="Date cutoff for Strava->Garmin migration (YYYY-MM-DD)")
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-
+    # Strava backup and source cutover. The cutoff day is inclusive: Strava is
+    # backed up and used through 2026-10-15, Garmin is used from 2026-10-16.
+    migration_cutoff: str = Field(
+        default="2026-10-15",
+        description="Last day Strava is used and backed up (YYYY-MM-DD)",
+    )
+    strava_backup_enabled: bool = Field(
+        default=True, description="Run automatic Strava-to-SQLite backups"
+    )
+    strava_backup_on_startup: bool = Field(
+        default=True, description="Start an incremental backup when the app starts"
+    )
+    strava_backup_schedule_hour: int = Field(
+        default=4, description="Daily Strava backup hour (server local time)"
+    )
+    strava_backup_schedule_minute: int = Field(
+        default=15, description="Daily Strava backup minute"
+    )
+    strava_backup_streams_per_run: int = Field(
+        default=60,
+        ge=0,
+        description="Maximum activity stream downloads per backup run",
+    )
 
 # Global settings instance
 settings = Settings()

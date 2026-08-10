@@ -10,10 +10,10 @@ The bot and REST API use this service exclusively.
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from app.config import settings
 from app.models.database import (
@@ -22,6 +22,7 @@ from app.models.database import (
 )
 from app.models.strava import Activity, Gear, ActivityFilter
 from app.services.garmin_service import GarminService, GarminAPIError
+from app.services.strava_service import StravaAPIError, StravaService
 
 import gpxpy
 import gpxpy.gpx
@@ -42,9 +43,21 @@ class UnifiedActivityService:
     """
 
     def __init__(self):
+        self.strava = StravaService()
         self.garmin = GarminService()
-        self._cutoff = datetime.strptime(settings.migration_cutoff, "%Y-%m-%d")
+        self._cutoff_day = datetime.strptime(
+            settings.migration_cutoff, "%Y-%m-%d"
+        ).date()
+        # Internal comparisons use the first instant of the following day so
+        # every activity on the inclusive cutoff date remains in Strava/SQLite.
+        self._cutoff = datetime.combine(
+            self._cutoff_day + timedelta(days=1), datetime.min.time()
+        )
         self._db_initialized = False
+
+    def strava_is_live(self, today: Optional[date] = None) -> bool:
+        """The configured cutoff day itself still belongs to Strava."""
+        return (today or date.today()) <= self._cutoff_day
 
     async def _ensure_db(self):
         if not self._db_initialized:
@@ -59,6 +72,12 @@ class UnifiedActivityService:
         all_pages: bool = False,
     ) -> List[Activity]:
         """Get activities from both sources, merged and sorted."""
+        if self.strava_is_live():
+            try:
+                return await self.strava.get_activities(activity_filter, all_pages)
+            except StravaAPIError as exc:
+                raise UnifiedServiceError(str(exc)) from exc
+
         await self._ensure_db()
 
         after = activity_filter.after if activity_filter else None
@@ -95,6 +114,13 @@ class UnifiedActivityService:
 
     async def get_activity_by_id(self, activity_id: int, source: Optional[str] = None) -> Activity:
         """Get activity by ID. Try SQLite first, then Garmin."""
+        if self.strava_is_live() and source != "garmin":
+            try:
+                return await self.strava.get_activity_by_id(activity_id)
+            except StravaAPIError as exc:
+                if source == "strava":
+                    raise UnifiedServiceError(str(exc)) from exc
+
         await self._ensure_db()
 
         db_activity = None
@@ -135,6 +161,12 @@ class UnifiedActivityService:
 
     async def get_athlete_gear(self) -> List[Gear]:
         """Get gear from both SQLite and Garmin."""
+        if self.strava_is_live():
+            try:
+                return await self.strava.get_athlete_gear()
+            except StravaAPIError as exc:
+                raise UnifiedServiceError(str(exc)) from exc
+
         await self._ensure_db()
         gear_list: List[Gear] = []
 
@@ -167,6 +199,14 @@ class UnifiedActivityService:
 
     async def download_gpx(self, activity_id: int, save_path: Optional[str] = None, activity_name: Optional[str] = None) -> str:
         """Download/generate GPX. Try Garmin first (native GPX), fall back to SQLite streams."""
+        if self.strava_is_live():
+            try:
+                return await self.strava.download_gpx(
+                    activity_id, save_path=save_path, activity_name=activity_name
+                )
+            except StravaAPIError as exc:
+                raise UnifiedServiceError(str(exc)) from exc
+
         if not save_path:
             save_path = settings.gpx_storage_path
         Path(save_path).mkdir(parents=True, exist_ok=True)
@@ -198,16 +238,16 @@ class UnifiedActivityService:
     async def _get_activities_from_db(self, activity_filter: Optional[ActivityFilter]) -> List[Activity]:
         """Query SQLite for activities."""
         async with async_session() as session:
-            query = select(ActivityDB)
+            query = select(ActivityDB).where(
+                ActivityDB.source == "strava",
+                ActivityDB.start_date < self._cutoff,
+            )
 
             if activity_filter:
                 if activity_filter.after:
                     query = query.where(ActivityDB.start_date > activity_filter.after)
                 if activity_filter.before:
                     query = query.where(ActivityDB.start_date < activity_filter.before)
-                else:
-                    # Don't return activities past cutoff from SQLite
-                    query = query.where(ActivityDB.start_date <= self._cutoff)
 
                 if activity_filter.activity_type:
                     query = query.where(ActivityDB.sport_type == activity_filter.activity_type)
@@ -218,9 +258,6 @@ class UnifiedActivityService:
                         query = query.where(ActivityDB.gear_id == None)
                 if activity_filter.gear_id:
                     query = query.where(ActivityDB.gear_id == activity_filter.gear_id)
-            else:
-                query = query.where(ActivityDB.start_date <= self._cutoff)
-
             query = query.order_by(ActivityDB.start_date.desc())
             result = await session.execute(query)
             return [self._db_to_model(a) for a in result.scalars().all()]

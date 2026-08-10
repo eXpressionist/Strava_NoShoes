@@ -22,7 +22,7 @@ from app.models.forecast import (
     RoutePreview,
 )
 from app.models.strava import Activity, ActivityFilter
-from app.services.strava_service import StravaAPIError, StravaService
+from app.services.unified_service import UnifiedActivityService, UnifiedServiceError
 
 
 class ForecastServiceError(Exception):
@@ -64,8 +64,8 @@ class ForecastService:
 
     max_upload_bytes = 20 * 1024 * 1024
 
-    def __init__(self, activity_service: Optional[StravaService] = None):
-        self.activities = activity_service or StravaService()
+    def __init__(self, activity_service: Optional[object] = None):
+        self.activities = activity_service or UnifiedActivityService()
         self.route_storage = Path(settings.gpx_storage_path) / "planned_routes"
 
     async def get_candidates(
@@ -184,8 +184,17 @@ class ForecastService:
         selected = []
         for selection in request.activities:
             try:
-                activity = await self.activities.get_activity_by_id(selection.activity_id)
-            except StravaAPIError as exc:
+                try:
+                    activity = await self.activities.get_activity_by_id(
+                        selection.activity_id, source=selection.source
+                    )
+                except TypeError:
+                    # Small test doubles and older integrations may not accept
+                    # the optional source hint.
+                    activity = await self.activities.get_activity_by_id(
+                        selection.activity_id
+                    )
+            except UnifiedServiceError as exc:
                 raise ForecastServiceError(str(exc)) from exc
             selected.append((activity, selection))
 
