@@ -56,6 +56,5 @@ async def calculate_forecast(request: ForecastRequest):
     """Calculate elapsed-time ranges for checkpoints and finish."""
     try:
         return await service.calculate(request)
-    except (ForecastServiceError, StravaAPIError) as exc:
     except (ForecastServiceError, UnifiedServiceError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
