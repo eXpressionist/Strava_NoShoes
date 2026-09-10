@@ -3,15 +3,20 @@
 import asyncio
 import json
 import time
-from datetime import date
+from datetime import date, datetime
 
 import httpx
 import pytest
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.forecast_routes import service as forecast_api_service
 from app.api.routes import athlete_service, service as api_service
 from app.config import settings
 from app.main import bot_service
+from app.models.database import ActivityDB, Base
+from app.models.strava import ActivityFilter
+from app.services import unified_service
+from app.services.garmin_service import GarminAPIError
 from app.services.strava_service import StravaAPIError, StravaService
 from app.services.unified_service import UnifiedActivityService
 
@@ -30,6 +35,46 @@ def test_cutoff_day_is_inclusive(monkeypatch):
     assert service.strava_is_live(date(2026, 10, 15)) is True
     assert service.strava_is_live(date(2026, 10, 16)) is False
     assert service._cutoff.isoformat() == "2026-10-16T00:00:00"
+
+
+@pytest.mark.asyncio
+async def test_post_cutoff_garmin_failure_uses_sqlite_sync(tmp_path, monkeypatch):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'runtime.db'}")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with session_factory() as session:
+        session.add(
+            ActivityDB(
+                source="garmin",
+                source_id="901",
+                name="Synchronized Run",
+                sport_type="Run",
+                activity_type="Run",
+                start_date=datetime(2026, 10, 17, 4, 0),
+                start_date_local=datetime(2026, 10, 17, 8, 0),
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(settings, "migration_cutoff", "2026-10-15")
+    monkeypatch.setattr(unified_service, "async_session", session_factory)
+    service = UnifiedActivityService()
+    service._db_initialized = True
+    monkeypatch.setattr(service, "strava_is_live", lambda today=None: False)
+
+    async def unavailable(*args, **kwargs):
+        raise GarminAPIError("temporary outage")
+
+    monkeypatch.setattr(service.garmin, "get_activities", unavailable)
+
+    activities = await service.get_activities(
+        ActivityFilter(after=datetime(2026, 10, 16))
+    )
+
+    assert [activity.id for activity in activities] == [901]
+    assert activities[0].source == "garmin"
+    await engine.dispose()
 
 
 def test_tokens_for_another_strava_client_are_ignored(tmp_path, monkeypatch):

@@ -17,11 +17,15 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.models.database import (
-    ActivityDB, GearDB, ActivityStreamDB,
-    async_session, init_db
+    ActivityDB,
+    GearDB,
+    ActivityStreamDB,
+    async_session,
+    init_db,
 )
 from app.models.strava import Activity, Gear, ActivityFilter
 from app.services.garmin_service import GarminService, GarminAPIError
+from app.services.gear_policy import requires_gear
 from app.services.strava_service import StravaAPIError, StravaService
 
 import gpxpy
@@ -86,8 +90,8 @@ class UnifiedActivityService:
         results: List[Activity] = []
 
         # Determine which sources to query
-        need_sqlite = (after is None or after < self._cutoff)
-        need_garmin = (before is None or before > self._cutoff)
+        need_sqlite = after is None or after < self._cutoff
+        need_garmin = before is None or before > self._cutoff
 
         if need_sqlite:
             sqlite_activities = await self._get_activities_from_db(activity_filter)
@@ -103,16 +107,25 @@ class UnifiedActivityService:
                 )
                 # Apply additional filters
                 if activity_filter:
-                    garmin_activities = self._apply_filters(garmin_activities, activity_filter)
+                    garmin_activities = self._apply_filters(
+                        garmin_activities, activity_filter
+                    )
                 results.extend(garmin_activities)
             except GarminAPIError as e:
-                logger.warning(f"Garmin API error: {e}. Returning only SQLite data.")
+                logger.warning(
+                    "Garmin API error: %s. Returning synchronized SQLite data.", e
+                )
+                results.extend(
+                    await self._get_activities_from_db(activity_filter, source="garmin")
+                )
 
         # Sort newest first
         results.sort(key=lambda x: x.start_date, reverse=True)
         return results
 
-    async def get_activity_by_id(self, activity_id: int, source: Optional[str] = None) -> Activity:
+    async def get_activity_by_id(
+        self, activity_id: int, source: Optional[str] = None
+    ) -> Activity:
         """Get activity by ID. Try SQLite first, then Garmin."""
         if self.strava_is_live() and source != "garmin":
             try:
@@ -125,12 +138,7 @@ class UnifiedActivityService:
 
         db_activity = None
         if source in (None, "strava"):
-            async with async_session() as session:
-                query = select(ActivityDB).where(ActivityDB.source_id == str(activity_id))
-                if source:
-                    query = query.where(ActivityDB.source == source)
-                result = await session.execute(query)
-                db_activity = result.scalar_one_or_none()
+            db_activity = await self._get_activity_from_db(activity_id, "strava")
 
         if db_activity:
             return self._db_to_model(db_activity)
@@ -138,18 +146,29 @@ class UnifiedActivityService:
         if source == "strava":
             raise UnifiedServiceError(f"Strava activity {activity_id} was not found")
 
-        # Try Garmin
+        garmin_db_activity = await self._get_activity_from_db(activity_id, "garmin")
+
+        # Prefer current Garmin data, but remain operational when Garmin is down.
         try:
             return await self.garmin.get_activity_by_id(activity_id)
         except GarminAPIError as e:
-            raise UnifiedServiceError(f"Activity {activity_id} not found in any source: {e}")
+            if garmin_db_activity:
+                return self._db_to_model(garmin_db_activity)
+            raise UnifiedServiceError(
+                f"Activity {activity_id} not found in any source: {e}"
+            )
 
-    async def get_activities_without_gear(self, after: Optional[datetime] = None) -> List[Activity]:
+    async def get_activities_without_gear(
+        self, after: Optional[datetime] = None
+    ) -> List[Activity]:
         """Get activities without gear from both sources."""
         activity_filter = ActivityFilter(has_gear=False, after=after)
-        return await self.get_activities(activity_filter, all_pages=True)
+        activities = await self.get_activities(activity_filter, all_pages=True)
+        return [activity for activity in activities if requires_gear(activity)]
 
-    async def get_running_activities(self, limit: Optional[int] = None) -> List[Activity]:
+    async def get_running_activities(
+        self, limit: Optional[int] = None
+    ) -> List[Activity]:
         """Get running activities from both sources."""
         activity_filter = ActivityFilter(activity_type="Run")
         activities = await self.get_activities(activity_filter, all_pages=True)
@@ -174,14 +193,16 @@ class UnifiedActivityService:
         async with async_session() as session:
             result = await session.execute(select(GearDB))
             for g in result.scalars().all():
-                gear_list.append(Gear(
-                    id=g.source_id,
-                    primary=g.primary,
-                    name=g.name,
-                    resource_state=2,
-                    retired=g.retired,
-                    distance=g.distance,
-                ))
+                gear_list.append(
+                    Gear(
+                        id=g.source_id,
+                        primary=g.primary,
+                        name=g.name,
+                        resource_state=2,
+                        retired=g.retired,
+                        distance=g.distance,
+                    )
+                )
 
         # Garmin gear (may overlap, deduplicate by name)
         try:
@@ -197,7 +218,12 @@ class UnifiedActivityService:
 
     # ─── GPX ──────────────────────────────────────────────────────────
 
-    async def download_gpx(self, activity_id: int, save_path: Optional[str] = None, activity_name: Optional[str] = None) -> str:
+    async def download_gpx(
+        self,
+        activity_id: int,
+        save_path: Optional[str] = None,
+        activity_name: Optional[str] = None,
+    ) -> str:
         """Download/generate GPX. Try Garmin first (native GPX), fall back to SQLite streams."""
         if self.strava_is_live():
             try:
@@ -226,22 +252,46 @@ class UnifiedActivityService:
         else:
             # Try Garmin native GPX download
             try:
-                return await self.garmin.download_gpx(activity_id, save_path, activity_name)
+                return await self.garmin.download_gpx(
+                    activity_id, save_path, activity_name
+                )
             except GarminAPIError:
                 # Maybe it's in SQLite after all
                 if db_activity:
-                    return await self._gpx_from_streams(db_activity, save_path, activity_name)
-                raise UnifiedServiceError(f"Cannot download GPX for activity {activity_id}")
+                    return await self._gpx_from_streams(
+                        db_activity, save_path, activity_name
+                    )
+                raise UnifiedServiceError(
+                    f"Cannot download GPX for activity {activity_id}"
+                )
 
     # ─── Private helpers ───────────────────────────────────────────────
 
-    async def _get_activities_from_db(self, activity_filter: Optional[ActivityFilter]) -> List[Activity]:
-        """Query SQLite for activities."""
+    async def _get_activity_from_db(
+        self, activity_id: int, source: str
+    ) -> Optional[ActivityDB]:
+        """Get one activity from a specific synchronized source."""
         async with async_session() as session:
-            query = select(ActivityDB).where(
-                ActivityDB.source == "strava",
-                ActivityDB.start_date < self._cutoff,
+            result = await session.execute(
+                select(ActivityDB).where(
+                    ActivityDB.source == source,
+                    ActivityDB.source_id == str(activity_id),
+                )
             )
+            return result.scalar_one_or_none()
+
+    async def _get_activities_from_db(
+        self,
+        activity_filter: Optional[ActivityFilter],
+        source: str = "strava",
+    ) -> List[Activity]:
+        """Query SQLite for synchronized activities from one source."""
+        async with async_session() as session:
+            query = select(ActivityDB).where(ActivityDB.source == source)
+            if source == "strava":
+                query = query.where(ActivityDB.start_date < self._cutoff)
+            elif source == "garmin":
+                query = query.where(ActivityDB.start_date >= self._cutoff)
 
             if activity_filter:
                 if activity_filter.after:
@@ -250,7 +300,9 @@ class UnifiedActivityService:
                     query = query.where(ActivityDB.start_date < activity_filter.before)
 
                 if activity_filter.activity_type:
-                    query = query.where(ActivityDB.sport_type == activity_filter.activity_type)
+                    query = query.where(
+                        ActivityDB.sport_type == activity_filter.activity_type
+                    )
                 if activity_filter.has_gear is not None:
                     if activity_filter.has_gear:
                         query = query.where(ActivityDB.gear_id != None)
@@ -315,7 +367,9 @@ class UnifiedActivityService:
             has_kudoed=False,
         )
 
-    def _apply_filters(self, activities: List[Activity], f: ActivityFilter) -> List[Activity]:
+    def _apply_filters(
+        self, activities: List[Activity], f: ActivityFilter
+    ) -> List[Activity]:
         """Apply ActivityFilter to a list of activities."""
         result = activities
         if f.activity_type:
@@ -329,10 +383,12 @@ class UnifiedActivityService:
             result = [a for a in result if a.gear_id == f.gear_id]
         return result
 
-    async def _gpx_from_streams(self, db_activity: ActivityDB, save_path: str, activity_name: Optional[str]) -> str:
+    async def _gpx_from_streams(
+        self, db_activity: ActivityDB, save_path: str, activity_name: Optional[str]
+    ) -> str:
         """Generate GPX file from stored stream data in SQLite."""
         name = activity_name or db_activity.name
-        safe_name = name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+        safe_name = name.replace(" ", "_").replace("/", "_").replace("\\", "_")
         filename = f"{safe_name}.gpx"
         file_path = os.path.join(save_path, filename)
 
@@ -348,7 +404,9 @@ class UnifiedActivityService:
             points = result.scalars().all()
 
         if not points:
-            raise UnifiedServiceError(f"No stream data stored for activity {db_activity.source_id}")
+            raise UnifiedServiceError(
+                f"No stream data stored for activity {db_activity.source_id}"
+            )
 
         # Build GPX
         gpx = gpxpy.gpx.GPX()
@@ -368,7 +426,12 @@ class UnifiedActivityService:
                 continue
 
             from datetime import timedelta
-            point_time = start_time + timedelta(seconds=pt.time_offset) if pt.time_offset else None
+
+            point_time = (
+                start_time + timedelta(seconds=pt.time_offset)
+                if pt.time_offset
+                else None
+            )
 
             gpx_point = gpxpy.gpx.GPXTrackPoint(
                 latitude=pt.latitude,
@@ -380,13 +443,14 @@ class UnifiedActivityService:
             # Add HR/cadence extensions
             if pt.heartrate or pt.cadence:
                 from lxml import etree
-                TPE_NS = 'http://www.garmin.com/xmlschemas/TrackPointExtension/v1'
-                tpx = etree.Element(f'{{{TPE_NS}}}TrackPointExtension')
+
+                TPE_NS = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
+                tpx = etree.Element(f"{{{TPE_NS}}}TrackPointExtension")
                 if pt.heartrate:
-                    hr = etree.SubElement(tpx, f'{{{TPE_NS}}}hr')
+                    hr = etree.SubElement(tpx, f"{{{TPE_NS}}}hr")
                     hr.text = str(pt.heartrate)
                 if pt.cadence:
-                    cad = etree.SubElement(tpx, f'{{{TPE_NS}}}cad')
+                    cad = etree.SubElement(tpx, f"{{{TPE_NS}}}cad")
                     cad.text = str(pt.cadence)
                 gpx_point.extensions.append(tpx)
 
@@ -394,15 +458,19 @@ class UnifiedActivityService:
 
         # Write GPX
         gpx_xml = gpx.to_xml()
-        TPE_NS = 'http://www.garmin.com/xmlschemas/TrackPointExtension/v1'
-        gpx_xml = gpx_xml.replace(f'<{TPE_NS}:TrackPointExtension>', '<gpxtpx:TrackPointExtension>')
-        gpx_xml = gpx_xml.replace(f'</{TPE_NS}:TrackPointExtension>', '</gpxtpx:TrackPointExtension>')
-        gpx_xml = gpx_xml.replace(f'<{TPE_NS}:hr>', '<gpxtpx:hr>')
-        gpx_xml = gpx_xml.replace(f'</{TPE_NS}:hr>', '</gpxtpx:hr>')
-        gpx_xml = gpx_xml.replace(f'<{TPE_NS}:cad>', '<gpxtpx:cad>')
-        gpx_xml = gpx_xml.replace(f'</{TPE_NS}:cad>', '</gpxtpx:cad>')
-        if 'xmlns:gpxtpx' not in gpx_xml:
-            gpx_xml = gpx_xml.replace('<gpx ', f'<gpx xmlns:gpxtpx="{TPE_NS}" ')
+        TPE_NS = "http://www.garmin.com/xmlschemas/TrackPointExtension/v1"
+        gpx_xml = gpx_xml.replace(
+            f"<{TPE_NS}:TrackPointExtension>", "<gpxtpx:TrackPointExtension>"
+        )
+        gpx_xml = gpx_xml.replace(
+            f"</{TPE_NS}:TrackPointExtension>", "</gpxtpx:TrackPointExtension>"
+        )
+        gpx_xml = gpx_xml.replace(f"<{TPE_NS}:hr>", "<gpxtpx:hr>")
+        gpx_xml = gpx_xml.replace(f"</{TPE_NS}:hr>", "</gpxtpx:hr>")
+        gpx_xml = gpx_xml.replace(f"<{TPE_NS}:cad>", "<gpxtpx:cad>")
+        gpx_xml = gpx_xml.replace(f"</{TPE_NS}:cad>", "</gpxtpx:cad>")
+        if "xmlns:gpxtpx" not in gpx_xml:
+            gpx_xml = gpx_xml.replace("<gpx ", f'<gpx xmlns:gpxtpx="{TPE_NS}" ')
 
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(gpx_xml)

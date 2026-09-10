@@ -17,14 +17,17 @@ except ImportError:  # Strava remains usable before cutover in minimal installs.
     class GarminConnectAuthenticationError(Exception):
         pass
 
+
 from app.config import settings
 from app.models.strava import Activity, Gear  # Reuse existing Pydantic models
+from app.services.gear_policy import requires_gear
 
 logger = logging.getLogger(__name__)
 
 
 class GarminAPIError(Exception):
     """Custom exception for Garmin API errors."""
+
     pass
 
 
@@ -44,7 +47,9 @@ class GarminService:
             return
 
         if not self.email or not self.password:
-            raise GarminAPIError("Garmin credentials not configured. Set GARMIN_EMAIL and GARMIN_PASSWORD.")
+            raise GarminAPIError(
+                "Garmin credentials not configured. Set GARMIN_EMAIL and GARMIN_PASSWORD."
+            )
         if Garmin is None:
             raise GarminAPIError("garminconnect dependency is not installed")
 
@@ -70,7 +75,9 @@ class GarminService:
         # Activity-list and activity-detail endpoints use different nesting.
         summary = data.get("summaryDTO", data)
         activity_id = data.get("activityId", 0)
-        start_time_str = summary.get("startTimeLocal", "") or summary.get("startTimeGMT", "")
+        start_time_str = summary.get("startTimeLocal", "") or summary.get(
+            "startTimeGMT", ""
+        )
         start_time_gmt = summary.get("startTimeGMT", "") or start_time_str
 
         # Parse datetime
@@ -79,7 +86,11 @@ class GarminService:
 
         # Map Garmin activity type to a unified type
         activity_type = data.get("activityType") or data.get("activityTypeDTO", {})
-        type_key = activity_type.get("typeKey", "other") if isinstance(activity_type, dict) else "other"
+        type_key = (
+            activity_type.get("typeKey", "other")
+            if isinstance(activity_type, dict)
+            else "other"
+        )
         sport_type = self._map_garmin_sport_type(type_key)
 
         # Gear
@@ -92,13 +103,23 @@ class GarminService:
             if gear_list:
                 gear_id = str(gear_list[0]) if gear_list else None
 
+        start_lat = summary.get("startLatitude")
+        start_lng = summary.get("startLongitude")
+        start_latlng = (
+            [start_lat, start_lng]
+            if start_lat is not None and start_lng is not None
+            else None
+        )
+
         return Activity(
             source="garmin",
             resource_state=2,
             athlete=None,
             name=data.get("activityName", "Unnamed Activity"),
             distance=summary.get("distance", 0.0) or 0.0,
-            moving_time=int(summary.get("movingDuration", 0) or summary.get("duration", 0) or 0),
+            moving_time=int(
+                summary.get("movingDuration", 0) or summary.get("duration", 0) or 0
+            ),
             elapsed_time=int(summary.get("duration", 0) or 0),
             total_elevation_gain=summary.get("elevationGain", 0.0) or 0.0,
             type=sport_type,
@@ -121,9 +142,11 @@ class GarminService:
             flagged=False,
             gear_id=gear_id,
             gear_name=gear_name,
+            start_latlng=start_latlng,
             average_speed=summary.get("averageSpeed", 0.0) or 0.0,
             max_speed=summary.get("maxSpeed", 0.0) or 0.0,
-            average_cadence=summary.get("averageRunningCadenceInStepsPerMinute") or summary.get("averageCadence"),
+            average_cadence=summary.get("averageRunningCadenceInStepsPerMinute")
+            or summary.get("averageCadence"),
             has_heartrate=bool(summary.get("averageHR")),
             average_heartrate=summary.get("averageHR"),
             max_heartrate=summary.get("maxHR"),
@@ -182,7 +205,11 @@ class GarminService:
             if after or before:
                 # Use date-based search
                 start_date = after.strftime("%Y-%m-%d") if after else "2000-01-01"
-                end_date = before.strftime("%Y-%m-%d") if before else datetime.now().strftime("%Y-%m-%d")
+                end_date = (
+                    before.strftime("%Y-%m-%d")
+                    if before
+                    else datetime.now().strftime("%Y-%m-%d")
+                )
                 raw_activities = await asyncio.to_thread(
                     self.client.get_activities_by_date, start_date, end_date
                 )
@@ -220,14 +247,14 @@ class GarminService:
         except Exception as e:
             raise GarminAPIError(f"Failed to fetch activity {activity_id}: {e}")
 
-    async def get_activities_without_gear(self, after: Optional[datetime] = None) -> List[Activity]:
+    async def get_activities_without_gear(
+        self, after: Optional[datetime] = None
+    ) -> List[Activity]:
         """Get activities without gear assigned."""
         activities = await self.get_activities(
-            after=after,
-            before=datetime.now(),
-            limit=200
+            after=after, before=datetime.now(), limit=200
         )
-        return [a for a in activities if not a.gear_id]
+        return [a for a in activities if not a.gear_id and requires_gear(a)]
 
     async def get_athlete_gear(self) -> List[Gear]:
         """Return gear observed on recent Garmin activities."""
@@ -260,6 +287,8 @@ class GarminService:
         authoritative would therefore notify for every Garmin activity.
         """
         for activity in activities:
+            if not requires_gear(activity):
+                continue
             if activity.gear_id:
                 activity.gear_name = self._gear_cache.get(activity.gear_id)
                 continue
@@ -308,7 +337,12 @@ class GarminService:
             distance=item.get("totalDistance", 0.0),
         )
 
-    async def download_gpx(self, activity_id: int, save_path: Optional[str] = None, activity_name: Optional[str] = None) -> str:
+    async def download_gpx(
+        self,
+        activity_id: int,
+        save_path: Optional[str] = None,
+        activity_name: Optional[str] = None,
+    ) -> str:
         """Download GPX file for an activity from Garmin."""
         await self._ensure_connected()
 
@@ -325,7 +359,7 @@ class GarminService:
             except Exception:
                 activity_name = f"activity_{activity_id}"
 
-        safe_name = activity_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
+        safe_name = activity_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
         filename = f"{safe_name}.gpx"
         file_path = os.path.join(save_path, filename)
 
@@ -348,4 +382,6 @@ class GarminService:
             return file_path
 
         except Exception as e:
-            raise GarminAPIError(f"Failed to download GPX for activity {activity_id}: {e}")
+            raise GarminAPIError(
+                f"Failed to download GPX for activity {activity_id}: {e}"
+            )

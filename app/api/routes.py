@@ -19,9 +19,9 @@ async def health_check():
     return {"status": "ok", "message": "Strava NoShoes API is running (scheduled Strava/Garmin cutover)"}
 
 
-@router.get("/backup/status", summary="Get local Strava backup status")
+@router.get("/backup/status", summary="Get local activity sync status")
 async def get_backup_status():
-    """Return safe backup counts for operational verification."""
+    """Return safe Strava backup and Garmin sync counts."""
     return await backup_scheduler.status()
 
 

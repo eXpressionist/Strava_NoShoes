@@ -26,6 +26,8 @@ services:
       GPX_STORAGE_PATH: /app/data/gpx
       DATABASE_URL: sqlite:////app/data/strava_noshoes.db
       GARMIN_TOKEN_STORE: /app/data/garmin_tokens
+      GARMIN_SYNC_ENABLED: "true"
+      GARMIN_SYNC_LOOKBACK_DAYS: "7"
       MIGRATION_CUTOFF: "2026-10-15"
     volumes:
       - /home/NoShoes/data:/app/data
@@ -51,6 +53,8 @@ services:
       GPX_STORAGE_PATH: /app/data/gpx-secondary
       DATABASE_URL: sqlite:////app/data/strava_noshoes-secondary.db
       GARMIN_TOKEN_STORE: /app/data/garmin_tokens-secondary
+      GARMIN_SYNC_ENABLED: "true"
+      GARMIN_SYNC_LOOKBACK_DAYS: "7"
       MIGRATION_CUTOFF: "2026-10-15"
     volumes:
       - /home/NoShoes2/data:/app/data

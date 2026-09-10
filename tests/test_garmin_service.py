@@ -57,6 +57,30 @@ async def test_garmin_activity_specific_gear_is_attached():
     assert activity.gear_name == "Trail shoes"
 
 
+@pytest.mark.asyncio
+async def test_strength_training_does_not_request_or_require_gear(monkeypatch):
+    class Client:
+        def get_activity_gear(self, activity_id):
+            raise AssertionError("Gear must not be queried for strength training")
+
+    data = garmin_activity()
+    data["activityType"] = {"typeKey": "strength_training"}
+    service = GarminService()
+    service.client = Client()
+    activity = service._garmin_activity_to_model(data)
+
+    await service._populate_gear_names([activity])
+
+    async def get_activities(*args, **kwargs):
+        return [activity]
+
+    monkeypatch.setattr(service, "get_activities", get_activities)
+
+    assert activity.sport_type == "WeightTraining"
+    assert activity.gear_id is None
+    assert await service.get_activities_without_gear() == []
+
+
 def test_garmin_detail_response_uses_summary_dto():
     service = GarminService()
     activity = service._garmin_activity_to_model(

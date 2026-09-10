@@ -1,4 +1,4 @@
-"""Automatic, resumable Strava backup scheduling."""
+"""Automatic Strava backup and post-cutoff Garmin synchronization."""
 
 import asyncio
 import logging
@@ -17,13 +17,14 @@ from app.models.database import (
     async_session,
     init_db,
 )
+from scripts.backup_garmin import GarminBackup
 from scripts.backup_strava import StravaBackup
 
 logger = logging.getLogger(__name__)
 
 
 class StravaBackupScheduler:
-    """Run one backup at a time until the configured inclusive cutoff day."""
+    """Run one source synchronization at a time across the migration cutoff."""
 
     def __init__(self) -> None:
         self.scheduler = AsyncIOScheduler()
@@ -39,29 +40,37 @@ class StravaBackupScheduler:
         return datetime.strptime(settings.migration_cutoff, "%Y-%m-%d").date()
 
     def should_run(self, today: Optional[date] = None) -> bool:
-        return (
-            settings.strava_backup_enabled and (today or date.today()) <= self._cutoff()
-        )
+        current_day = today or date.today()
+        if current_day <= self._cutoff():
+            return settings.strava_backup_enabled
+        return settings.garmin_sync_enabled
+
+    def source_for_date(self, today: Optional[date] = None) -> str:
+        current_day = today or date.today()
+        return "strava" if current_day <= self._cutoff() else "garmin"
 
     async def run_backup(self) -> Optional[dict]:
         if not self.should_run():
-            logger.info("Automatic Strava backup is outside its active date window")
+            logger.info("Automatic activity synchronization is disabled")
             return None
         if self._lock.locked():
-            logger.info("A Strava backup is already running; duplicate run skipped")
+            logger.info("An activity sync is already running; duplicate run skipped")
             return None
 
         async with self._lock:
             self.last_started_at = datetime.now()
             self.last_error = None
             try:
-                self.last_result = await StravaBackup().run()
+                if self.source_for_date() == "strava":
+                    self.last_result = await StravaBackup().run()
+                else:
+                    self.last_result = await GarminBackup().run()
                 return self.last_result
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.last_error = str(exc)
-                logger.exception("Automatic Strava backup failed; next run will resume")
+                logger.exception("Automatic activity sync failed; next run will resume")
                 return None
             finally:
                 self.last_finished_at = datetime.now()
@@ -90,10 +99,25 @@ class StravaBackupScheduler:
                     ~exists().where(ActivityStreamDB.activity_id == ActivityDB.id),
                 )
             )
+            garmin_total = await session.scalar(
+                select(func.count(ActivityDB.id)).where(ActivityDB.source == "garmin")
+            )
+            garmin_latest = await session.scalar(
+                select(func.max(ActivityDB.start_date)).where(
+                    ActivityDB.source == "garmin"
+                )
+            )
+            garmin_gear = await session.scalar(
+                select(func.count(GearDB.id)).where(GearDB.source == "garmin")
+            )
 
         return {
             "enabled": settings.strava_backup_enabled,
+            "strava_backup_enabled": settings.strava_backup_enabled,
+            "garmin_sync_enabled": settings.garmin_sync_enabled,
             "active_through": self._cutoff().isoformat(),
+            "current_source": self.source_for_date(),
+            "current_source_enabled": self.should_run(),
             "running": self._lock.locked(),
             "last_started_at": self.last_started_at,
             "last_finished_at": self.last_finished_at,
@@ -105,6 +129,9 @@ class StravaBackupScheduler:
                 "gear": gear or 0,
                 "activities_with_streams": streams or 0,
                 "activities_pending_streams": pending_streams or 0,
+                "garmin_activities": garmin_total or 0,
+                "latest_garmin_activity_at": garmin_latest,
+                "garmin_gear": garmin_gear or 0,
             },
         }
 
@@ -125,7 +152,7 @@ class StravaBackupScheduler:
         )
         self.scheduler.start()
         logger.info(
-            "Daily Strava backup scheduled for %02d:%02d through %s",
+            "Daily activity sync scheduled for %02d:%02d; Strava through %s, then Garmin",
             settings.strava_backup_schedule_hour,
             settings.strava_backup_schedule_minute,
             self._cutoff(),
