@@ -1,6 +1,6 @@
 x-strava-service: &strava-service
     build: .
-    image: strava-noshoes:local
+    image: ghcr.io/expressionist/strava_noshoes:latest
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
