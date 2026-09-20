@@ -54,6 +54,7 @@ class RoutePreview(BaseModel):
     elevation_gain_m: float
     elevation_loss_m: float
     checkpoints: List[RouteCheckpoint]
+    warnings: List[str] = Field(default_factory=list)
 
 
 class ForecastRequest(BaseModel):
@@ -98,3 +99,5 @@ class ForecastResponse(BaseModel):
     activities_used: int
     races_used: int
     method: str
+    profiles_used: int = 0
+    warnings: List[str] = Field(default_factory=list)

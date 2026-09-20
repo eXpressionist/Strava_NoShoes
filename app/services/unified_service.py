@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
 from app.models.database import (
@@ -217,6 +218,53 @@ class UnifiedActivityService:
         return gear_list
 
     # ─── GPX ──────────────────────────────────────────────────────────
+
+    async def get_activity_profile(
+        self, activity_id: int, source: str
+    ) -> list[tuple[float, float, Optional[float]]]:
+        """Read a source-qualified profile without creating files or exporting GPX.
+
+        Live Strava streams are preferred before cutover. Otherwise use stored
+        streams (including synchronized Garmin data). No profile means summary
+        calibration; a Garmin network export is not required for forecasting.
+        """
+        if source == "strava" and self.strava_is_live():
+            try:
+                streams = await self.strava.get_activity_streams(activity_id)
+                positions = streams.get("latlng", {}).get("data", [])
+                elevations = streams.get("altitude", {}).get("data", [])
+                if positions and len(positions) == len(elevations):
+                    return [
+                        (pos[0], pos[1], elevation)
+                        for pos, elevation in zip(positions, elevations)
+                    ]
+            except StravaAPIError:
+                pass
+        try:
+            await self._ensure_db()
+            async with async_session() as session:
+                result = await session.execute(
+                    select(
+                        ActivityStreamDB.latitude,
+                        ActivityStreamDB.longitude,
+                        ActivityStreamDB.altitude,
+                    )
+                    .join(ActivityDB, ActivityStreamDB.activity_id == ActivityDB.id)
+                    .where(
+                        ActivityDB.source == source,
+                        ActivityDB.source_id == str(activity_id),
+                    )
+                    .order_by(ActivityStreamDB.point_index)
+                )
+                rows = result.all()
+            # Dropping missing coordinates could silently bridge a missing track.
+            if any(lat is None or lon is None for lat, lon, _ in rows):
+                return []
+            return [(lat, lon, altitude) for lat, lon, altitude in rows]
+        except SQLAlchemyError as exc:
+            raise UnifiedServiceError(
+                "Historical profile storage is unavailable"
+            ) from exc
 
     async def download_gpx(
         self,
