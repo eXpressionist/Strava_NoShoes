@@ -6,6 +6,41 @@
 
 Проект уже включает готовые `Dockerfile` и `docker-compose.yml` для развертывания.
 
+### Автоматическая сборка и публикация в GHCR
+
+Workflow `.github/workflows/publish-container.yml` собирает существующий
+`Dockerfile` и публикует образ `ghcr.io/expressionist/strava_noshoes`:
+
+- Push в `main` обновляет теги `latest`, `main` и `sha-<полный SHA коммита>`.
+- Push тега `v*` публикует образ с этим тегом, например `v1.2.3`, и тегом SHA.
+  Тег `latest` при этом не меняется.
+- Pull request в `main` проверяет сборку без публикации образа.
+- Ручной запуск доступен в Actions → Build and publish container → Run workflow.
+  При выборе `main` обновится `latest`; для другой ветки используются её имя и SHA.
+
+Имя образа определяется из имени GitHub-репозитория и приводится к нижнему
+регистру. Публикация использует встроенный `GITHUB_TOKEN` с правом `packages: write`;
+добавлять отдельный токен в Secrets для workflow не требуется.
+
+После первой публикации проверьте видимость пакета в GitHub Packages. Чтобы сервер
+мог скачивать образ без авторизации, установите для пакета видимость Public.
+Для приватного пакета сначала выполните `docker login ghcr.io` с учётной записью,
+имеющей доступ к пакету, и personal access token (classic) с правом `read:packages`.
+
+После настройки `.env` и директорий данных запустите опубликованный образ:
+
+```bash
+docker compose pull strava-noshoes
+docker compose up -d --no-build strava-noshoes
+```
+
+Эти же команды обновляют контейнер после новой публикации. Workflow публикует
+образ; применение обновления на сервере выполняется отдельно.
+
+Подробнее: [Container registry — GitHub Docs](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+
+
 ### Шаг 1: Подготовка сервера
 
 **Требования:**
