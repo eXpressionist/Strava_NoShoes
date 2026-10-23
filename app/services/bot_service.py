@@ -58,9 +58,14 @@ class BotService:
         chat_id = update.effective_chat.id
         self.state["chat_id"] = chat_id
         self._save_state()
+        data_source = (
+            f"Strava through {settings.migration_cutoff}, then Garmin"
+            if settings.migration_enabled
+            else "Strava"
+        )
         await update.message.reply_text(
             f"Hello! I am ready to check your activities.\n"
-            f"Data source: Strava through {settings.migration_cutoff}, then Garmin.\n\n"
+            f"Data source: {data_source}.\n\n"
             f"Use /check to run a manual check.\n"
             f"Use /schedule HH:MM to set a daily check time (e.g., /schedule 20:00)."
         )
@@ -409,7 +414,7 @@ class BotService:
             self._schedule_job(h, m)
 
         await self.application.updater.start_polling()
-        logger.info("Telegram bot started (automatic Strava-to-Garmin cutover).")
+        logger.info("Telegram bot started.")
 
     async def shutdown(self):
         """Shutdown the bot."""

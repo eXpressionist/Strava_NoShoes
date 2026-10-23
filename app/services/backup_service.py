@@ -40,14 +40,15 @@ class StravaBackupScheduler:
         return datetime.strptime(settings.migration_cutoff, "%Y-%m-%d").date()
 
     def should_run(self, today: Optional[date] = None) -> bool:
-        current_day = today or date.today()
-        if current_day <= self._cutoff():
+        if self.source_for_date(today) == "strava":
             return settings.strava_backup_enabled
         return settings.garmin_sync_enabled
 
     def source_for_date(self, today: Optional[date] = None) -> str:
         current_day = today or date.today()
-        return "strava" if current_day <= self._cutoff() else "garmin"
+        if not settings.migration_enabled or current_day <= self._cutoff():
+            return "strava"
+        return "garmin"
 
     async def run_backup(self) -> Optional[dict]:
         if not self.should_run():
@@ -115,7 +116,10 @@ class StravaBackupScheduler:
             "enabled": settings.strava_backup_enabled,
             "strava_backup_enabled": settings.strava_backup_enabled,
             "garmin_sync_enabled": settings.garmin_sync_enabled,
-            "active_through": self._cutoff().isoformat(),
+            "migration_enabled": settings.migration_enabled,
+            "active_through": (
+                self._cutoff().isoformat() if settings.migration_enabled else None
+            ),
             "current_source": self.source_for_date(),
             "current_source_enabled": self.should_run(),
             "running": self._lock.locked(),
@@ -152,10 +156,14 @@ class StravaBackupScheduler:
         )
         self.scheduler.start()
         logger.info(
-            "Daily activity sync scheduled for %02d:%02d; Strava through %s, then Garmin",
+            "Daily activity sync scheduled for %02d:%02d; %s",
             settings.strava_backup_schedule_hour,
             settings.strava_backup_schedule_minute,
-            self._cutoff(),
+            (
+                f"Strava through {self._cutoff()}, then Garmin"
+                if settings.migration_enabled
+                else "Strava only"
+            ),
         )
         if settings.strava_backup_on_startup:
             self._startup_task = asyncio.create_task(

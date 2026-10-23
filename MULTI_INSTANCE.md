@@ -46,11 +46,34 @@ STRAVA_REFRESH_TOKEN=...
 
 ## Запуск
 
+Второй экземпляр остаётся на Strava постоянно. В его `environment` в Compose
+заданы `MIGRATION_ENABLED: "false"` и `GARMIN_SYNC_ENABLED: "false"`;
+такие же значения есть в `.env.secondary.example`. Это сохраняет live Strava
+для web API, прогноза, GPX и бота и продолжает ежедневный бэкап в SQLite
+после `MIGRATION_CUTOFF`. Просто отключить `GARMIN_SYNC_ENABLED` недостаточно:
+без отключения миграции источник всё равно переключится на Garmin.
+
 Только второй экземпляр:
 
 ```bash
 docker compose --profile secondary up -d --build strava-noshoes-secondary
 ```
+
+После обновления исходников и Compose на сервере пересоздайте только второй
+экземпляр, чтобы применить режим Strava и запустить догрузку при старте
+(`STRAVA_BACKUP_ENABLED=true`, `STRAVA_BACKUP_ON_STARTUP=true` в
+`.env.secondary`):
+
+```bash
+docker compose --profile secondary up -d --no-deps --build --force-recreate strava-noshoes-secondary
+curl http://localhost:8001/api/v1/backup/status
+```
+
+Ожидаемые поля статуса: `migration_enabled=false`, `current_source="strava"`,
+`current_source_enabled=true`, `active_through=null`. Во время догрузки
+`running=true`; после завершения проверьте `last_error=null` и дату
+`database.latest_activity_at`. Команда пересоздания второго сервиса не
+перезапускает основной контейнер на `8000`.
 
 После запуска:
 

@@ -475,6 +475,22 @@ docker stack deploy -c docker-compose.yml strava
 
 ## ✅ Итоговый чеклист для развертывания
 
+Для двух аккаунтов используйте настройки из `MULTI_INSTANCE.md`: основной
+экземпляр на `8000` переключается на Garmin по дате, второй на `8001`
+остаётся на Strava (`MIGRATION_ENABLED=false`, `GARMIN_SYNC_ENABLED=false`
+в `environment` второго сервиса). После обновления исходников и Compose
+примените изменение только ко второму экземпляру:
+
+```bash
+docker compose --profile secondary up -d --no-deps --build --force-recreate strava-noshoes-secondary
+curl http://localhost:8001/api/v1/backup/status
+```
+
+В `.env.secondary` должны быть включены `STRAVA_BACKUP_ENABLED=true` и
+`STRAVA_BACKUP_ON_STARTUP=true`, чтобы при пересоздании догрузить пропущенные
+тренировки. После завершения проверьте `current_source="strava"`,
+`last_error=null` и `database.latest_activity_at`.
+
 - [ ] Установлен Docker и Docker Compose
 - [ ] Проект скопирован на сервер
 - [ ] Настроен файл `.env` со всеми переменными

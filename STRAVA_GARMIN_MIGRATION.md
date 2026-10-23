@@ -2,6 +2,10 @@
 
 ## Поведение приложения
 
+- Основной экземпляр (`8000`) использует переход по дате с
+  `MIGRATION_ENABLED=true` (значение по умолчанию). Второй экземпляр (`8001`)
+  работает только со Strava: `MIGRATION_ENABLED=false`, без даты отключения
+  Strava и без автоматических запросов к Garmin.
 - До конца `2026-10-15` web API, прогноз и Telegram-бот читают live Strava.
 - При старте контейнера и затем ежедневно в `04:15` все summary-данные Strava
   идемпотентно обновляются в SQLite.
@@ -14,9 +18,10 @@
 - Проверка Gear использует activity-specific Garmin endpoint. Силовые тренировки
   (`WeightTraining`) исключены из проверки и напоминаний о Gear.
 
-Настройки можно переопределить в `.env` и `.env.secondary`:
+Настройки основного экземпляра в `.env`:
 
 ```env
+MIGRATION_ENABLED=true
 MIGRATION_CUTOFF=2026-10-15
 STRAVA_BACKUP_ENABLED=true
 STRAVA_BACKUP_ON_STARTUP=true
@@ -31,8 +36,10 @@ GARMIN_PASSWORD=...
 GARMIN_TOKEN_STORE=/app/data/garmin_tokens
 ```
 
-Второй контейнер использует собственные credentials и БД. Для него рекомендуется
-`GARMIN_TOKEN_STORE=/app/data/garmin_tokens-secondary`.
+Второй контейнер использует собственные Strava credentials и БД.
+Его Compose-конфигурация фиксирует `MIGRATION_ENABLED=false` и
+`GARMIN_SYNC_ENABLED=false`. Эти значения из `environment` имеют приоритет
+над `.env.secondary`. Подробности применения — в `MULTI_INSTANCE.md`.
 
 ## Проверка после деплоя
 
@@ -47,9 +54,13 @@ http://5.181.187.148:8001/api/v1/backup/status
 Strava. `activities_pending_streams` будет уменьшаться после каждого запуска и
 в итоге станет равным нулю. `last_error` должен быть `null`.
 
-После переключения поле `current_source` станет `garmin`, а рост синхронизации
+После переключения основного экземпляра поле `current_source` станет `garmin`,
+а рост синхронизации
 будет виден по `database.garmin_activities` и
 `database.latest_garmin_activity_at`.
+
+На `8001` поле `current_source` остаётся `strava`, `active_through=null`,
+а догрузка видна по `database.activities` и `database.latest_activity_at`.
 
 SQLite-файлы находятся в постоянных host volumes:
 
@@ -96,7 +107,6 @@ docker exec strava-noshoes-app-secondary python -m scripts.backup_strava
 
 ```bash
 docker exec strava-noshoes-app python -m scripts.backup_garmin
-docker exec strava-noshoes-app-secondary python -m scripts.backup_garmin
 ```
 
 Одновременный ручной и автоматический запуск для одного контейнера не нужен.

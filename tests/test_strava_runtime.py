@@ -4,13 +4,15 @@ import asyncio
 import json
 import time
 from datetime import date, datetime
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.forecast_routes import service as forecast_api_service
-from app.api.routes import athlete_service, service as api_service
+from app.api.routes import athlete_service
+from app.api.routes import service as api_service
 from app.config import settings
 from app.main import bot_service
 from app.models.database import ActivityDB, Base
@@ -18,7 +20,7 @@ from app.models.strava import ActivityFilter
 from app.services import unified_service
 from app.services.garmin_service import GarminAPIError
 from app.services.strava_service import StravaAPIError, StravaService
-from app.services.unified_service import UnifiedActivityService
+from app.services.unified_service import UnifiedActivityService, UnifiedServiceError
 
 
 def test_runtime_services_use_scheduled_cutover():
@@ -35,6 +37,55 @@ def test_cutoff_day_is_inclusive(monkeypatch):
     assert service.strava_is_live(date(2026, 10, 15)) is True
     assert service.strava_is_live(date(2026, 10, 16)) is False
     assert service._cutoff.isoformat() == "2026-10-16T00:00:00"
+
+
+@pytest.mark.asyncio
+async def test_strava_only_runtime_uses_live_strava_after_cutoff(monkeypatch):
+    monkeypatch.setattr(settings, "migration_enabled", False)
+    monkeypatch.setattr(settings, "migration_cutoff", "2000-10-15")
+    service = UnifiedActivityService()
+    activity_filter = ActivityFilter(after=datetime(2026, 10, 16))
+    activities = AsyncMock(return_value=["new Strava activity"])
+    gear = AsyncMock(return_value=["Strava shoes"])
+    gpx = AsyncMock(return_value="strava.gpx")
+    monkeypatch.setattr(service.strava, "get_activities", activities)
+    monkeypatch.setattr(service.strava, "get_athlete_gear", gear)
+    monkeypatch.setattr(service.strava, "download_gpx", gpx)
+    monkeypatch.setattr(
+        service,
+        "_ensure_db",
+        AsyncMock(side_effect=AssertionError("Live Strava must be used")),
+    )
+
+    assert service.strava_is_live(date(2026, 10, 23)) is True
+    assert await service.get_activities(activity_filter, all_pages=True) == [
+        "new Strava activity"
+    ]
+    assert await service.get_athlete_gear() == ["Strava shoes"]
+    assert await service.download_gpx(123) == "strava.gpx"
+    activities.assert_awaited_once_with(activity_filter, True)
+    gear.assert_awaited_once()
+    gpx.assert_awaited_once_with(123, save_path=None, activity_name=None)
+
+
+@pytest.mark.asyncio
+async def test_strava_only_lookup_does_not_fall_through_to_garmin(monkeypatch):
+    monkeypatch.setattr(settings, "migration_enabled", False)
+    monkeypatch.setattr(settings, "migration_cutoff", "2000-10-15")
+    service = UnifiedActivityService()
+    monkeypatch.setattr(
+        service.strava,
+        "get_activity_by_id",
+        AsyncMock(side_effect=StravaAPIError("Activity not found")),
+    )
+    monkeypatch.setattr(
+        service,
+        "_ensure_db",
+        AsyncMock(side_effect=AssertionError("Must report the Strava error")),
+    )
+
+    with pytest.raises(UnifiedServiceError, match="Activity not found"):
+        await service.get_activity_by_id(123)
 
 
 @pytest.mark.asyncio

@@ -66,7 +66,7 @@ class StravaBackup:
         logger.info("Database tables created/verified.")
 
         cutoff = datetime.strptime(settings.migration_cutoff, "%Y-%m-%d").date()
-        if date.today() > cutoff:
+        if settings.migration_enabled and date.today() > cutoff:
             logger.info("Strava cutoff %s has passed; backup skipped", cutoff)
             return self.stats
 

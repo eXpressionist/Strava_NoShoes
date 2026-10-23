@@ -1,4 +1,5 @@
-from datetime import date
+from datetime import date, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import settings
 from app.models.database import ActivityDB, Base, GearDB
+from app.services import backup_service
 from app.services.backup_service import StravaBackupScheduler
 from app.services.garmin_service import GarminService
 from scripts import backup_garmin, backup_strava
@@ -28,6 +30,88 @@ def test_garmin_sync_can_be_disabled_after_cutoff(monkeypatch):
     monkeypatch.setattr(settings, "garmin_sync_enabled", False)
 
     assert StravaBackupScheduler().should_run(date(2026, 10, 16)) is False
+
+
+@pytest.mark.asyncio
+async def test_strava_only_scheduler_keeps_syncing_after_cutoff(monkeypatch):
+    monkeypatch.setattr(settings, "migration_enabled", False)
+    monkeypatch.setattr(settings, "migration_cutoff", "2000-10-15")
+    monkeypatch.setattr(settings, "strava_backup_enabled", True)
+    monkeypatch.setattr(settings, "garmin_sync_enabled", False)
+    strava_run = AsyncMock(return_value={"activities_saved": 1})
+    monkeypatch.setattr(backup_service.StravaBackup, "run", strava_run)
+    garmin_run = AsyncMock(side_effect=AssertionError("Garmin must not be used"))
+    monkeypatch.setattr(backup_service.GarminBackup, "run", garmin_run)
+    scheduler = StravaBackupScheduler()
+
+    assert scheduler.source_for_date(date(2026, 10, 23)) == "strava"
+    assert scheduler.should_run(date(2026, 10, 23)) is True
+    assert await scheduler.run_backup() == {"activities_saved": 1}
+    assert scheduler.last_error is None
+    strava_run.assert_awaited_once()
+    garmin_run.assert_not_awaited()
+
+    monkeypatch.setattr(settings, "strava_backup_enabled", False)
+    assert scheduler.should_run(date(2026, 10, 23)) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("migration_enabled", [False, True])
+async def test_strava_backup_respects_instance_migration_mode(
+    tmp_path, monkeypatch, migration_enabled
+):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mode.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def init_test_db():
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+    monkeypatch.setattr(backup_strava, "init_db", init_test_db)
+    monkeypatch.setattr(backup_strava, "async_session", sessions)
+    monkeypatch.setattr(backup_service, "init_db", init_test_db)
+    monkeypatch.setattr(backup_service, "async_session", sessions)
+    monkeypatch.setattr(settings, "migration_enabled", migration_enabled)
+    monkeypatch.setattr(settings, "migration_cutoff", "2000-10-15")
+
+    class FakeStrava:
+        async def _make_request(self, method, endpoint, params=None):
+            return [
+                {
+                    "id": 303,
+                    "name": "Run after cutoff",
+                    "sport_type": "Run",
+                    "start_date": "2026-10-20T06:00:00Z",
+                    "start_date_local": "2026-10-20T09:00:00Z",
+                }
+            ]
+
+        async def get_athlete_gear(self):
+            return []
+
+    backup = backup_strava.StravaBackup(streams_limit=0)
+    backup.strava = FakeStrava()
+    try:
+        result = await backup.run()
+        status = await StravaBackupScheduler().status()
+        async with sessions() as session:
+            rows = (await session.execute(select(ActivityDB))).scalars().all()
+
+        assert result["errors"] == []
+        assert status["migration_enabled"] is migration_enabled
+        if migration_enabled:
+            assert rows == []
+            assert status["current_source"] == "garmin"
+            assert status["active_through"] == "2000-10-15"
+        else:
+            assert result["activities_saved"] == 1
+            assert len(rows) == 1
+            assert rows[0].source == "strava"
+            assert rows[0].start_date == datetime(2026, 10, 20, 6)
+            assert status["current_source"] == "strava"
+            assert status["active_through"] is None
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -61,7 +61,9 @@ class UnifiedActivityService:
         self._db_initialized = False
 
     def strava_is_live(self, today: Optional[date] = None) -> bool:
-        """The configured cutoff day itself still belongs to Strava."""
+        """Stay on Strava when migration is disabled or cutoff has not passed."""
+        if not settings.migration_enabled:
+            return True
         return (today or date.today()) <= self._cutoff_day
 
     async def _ensure_db(self):
@@ -132,7 +134,7 @@ class UnifiedActivityService:
             try:
                 return await self.strava.get_activity_by_id(activity_id)
             except StravaAPIError as exc:
-                if source == "strava":
+                if source == "strava" or not settings.migration_enabled:
                     raise UnifiedServiceError(str(exc)) from exc
 
         await self._ensure_db()

@@ -72,6 +72,10 @@ class Settings(BaseSettings):
 
     # Strava backup and source cutover. The cutoff day is inclusive: Strava is
     # backed up and used through 2026-10-15, Garmin is used from 2026-10-16.
+    migration_enabled: bool = Field(
+        default=True,
+        description="Switch to Garmin after cutoff; false keeps this instance on Strava",
+    )
     migration_cutoff: str = Field(
         default="2026-10-15",
         description="Last day Strava is used and backed up (YYYY-MM-DD)",
