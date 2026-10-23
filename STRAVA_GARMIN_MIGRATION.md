@@ -41,6 +41,22 @@ GARMIN_TOKEN_STORE=/app/data/garmin_tokens
 `GARMIN_SYNC_ENABLED=false`. Эти значения из `environment` имеют приоритет
 над `.env.secondary`. Подробности применения — в `MULTI_INSTANCE.md`.
 
+После перехода основного экземпляра на Garmin в его `.env` можно задать:
+
+```env
+STRAVA_BACKUP_ENABLED=false
+STRAVA_BACKUP_ON_STARTUP=true
+GARMIN_SYNC_ENABLED=true
+```
+
+`STRAVA_BACKUP_ENABLED` управляет только бэкапом Strava и после переключения
+не влияет на Garmin и чтение сохранённой истории. Несмотря на название,
+`STRAVA_BACKUP_ON_STARTUP` запускает синхронизацию текущего источника:
+до переключения Strava, после — Garmin. При `false` синхронизация при старте
+пропускается, ежедневный запуск по расписанию остаётся включённым через
+`GARMIN_SYNC_ENABLED=true`. Для второго экземпляра, который остаётся на Strava,
+оба флага `STRAVA_BACKUP_*` оставьте включёнными.
+
 ## Проверка после деплоя
 
 Оба endpoint безопасны и не содержат токенов:

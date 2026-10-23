@@ -815,6 +815,13 @@
         }
 
 
+        function getActivityUrl(activity) {
+            const baseUrl = activity.source === 'garmin'
+                ? 'https://connect.garmin.com/modern/activity/'
+                : 'https://www.strava.com/activities/';
+            return `${baseUrl}${activity.id}`;
+        }
+
         function displayActivities(activities) {
             const container = document.getElementById('activities-container');
 
@@ -838,7 +845,7 @@
                         <div class="card-body">
                             <h6 class="card-title">
                                 <i class="fas fa-${getActivityIcon(activity.sport_type)}"></i>
-                                <a href="https://www.strava.com/activities/${activity.id}" target="_blank" rel="noopener noreferrer" class="activity-title-link">
+                                <a href="${getActivityUrl(activity)}" target="_blank" rel="noopener noreferrer" class="activity-title-link">
                                     ${activity.name}
                                 </a>
                             </h6>
@@ -987,7 +994,7 @@
                 : (activity.sport_type === 'Run' ? 'Road Run' : activity.sport_type);
 
             return `
-                <a href="https://www.strava.com/activities/${activity.id}" target="_blank" rel="noopener noreferrer" class="calendar-activity ${activity.gear_id ? 'has-gear' : ''}">
+                <a href="${getActivityUrl(activity)}" target="_blank" rel="noopener noreferrer" class="calendar-activity ${activity.gear_id ? 'has-gear' : ''}">
                     <i class="fas fa-${getActivityIcon(activity.sport_type)}"></i>
                     ${activity.name}
                     <span class="calendar-activity-meta">${typeLabel} - ${(activity.distance / 1000).toFixed(2)} km</span>

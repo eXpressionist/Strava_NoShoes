@@ -84,7 +84,8 @@ class Settings(BaseSettings):
         default=True, description="Run automatic Strava-to-SQLite backups"
     )
     strava_backup_on_startup: bool = Field(
-        default=True, description="Start an incremental backup when the app starts"
+        default=True,
+        description="Sync the active source (Strava or Garmin) when the app starts",
     )
     strava_backup_schedule_hour: int = Field(
         default=4, description="Daily Strava backup hour (server local time)"
