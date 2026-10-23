@@ -197,6 +197,8 @@ class GarminService:
         limit: int = 20,
         after: Optional[datetime] = None,
         before: Optional[datetime] = None,
+        *,
+        include_gear: bool = True,
     ) -> List[Activity]:
         """Get activities from Garmin Connect."""
         await self._ensure_connected()
@@ -220,8 +222,8 @@ class GarminService:
 
             activities = [self._garmin_activity_to_model(a) for a in raw_activities]
 
-            # Populate gear names
-            await self._populate_gear_names(activities)
+            if include_gear:
+                await self._populate_gear_names(activities)
 
             # Sort newest first
             activities.sort(key=lambda x: x.start_date, reverse=True)
@@ -231,7 +233,9 @@ class GarminService:
             # Session expired, try re-auth
             self.client = None
             await self._ensure_connected()
-            return await self.get_activities(start, limit, after, before)
+            return await self.get_activities(
+                start, limit, after, before, include_gear=include_gear
+            )
         except Exception as e:
             raise GarminAPIError(f"Failed to fetch activities: {e}")
 

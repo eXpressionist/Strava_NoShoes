@@ -1,6 +1,6 @@
 """Application configuration using Pydantic Settings."""
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,8 +40,19 @@ class Settings(BaseSettings):
 
     # Telegram Bot Configuration
     bot_api_token: str = Field(default="", description="Telegram Bot API Token")
+    bot_enabled: bool = Field(default=True, description="Run Telegram polling here")
+    bot_primary_user_id: int = Field(default=0, ge=0)
+    bot_secondary_user_id: int = Field(default=0, ge=0)
+    bot_secondary_api_url: str = Field(
+        default="http://strava-noshoes-secondary:8000",
+        description="Internal URL of the secondary Strava-only instance",
+    )
     bot_state_file: str = Field(
         default="data/bot_state.json", description="Path to store bot state"
+    )
+    bot_timezone: str = Field(
+        default="",
+        description="IANA timezone for bot reminders; empty uses server local time",
     )
 
     # Application Configuration
@@ -107,6 +118,15 @@ class Settings(BaseSettings):
         ge=1,
         description="Days to re-sync so late Garmin gear edits are captured",
     )
+
+    @model_validator(mode="after")
+    def validate_bot_user_ids(self):
+        primary, secondary = self.bot_primary_user_id, self.bot_secondary_user_id
+        if bool(primary) != bool(secondary):
+            raise ValueError("Set both BOT_PRIMARY_USER_ID and BOT_SECONDARY_USER_ID")
+        if primary and primary == secondary:
+            raise ValueError("Primary and secondary Telegram user IDs must differ")
+        return self
 
 
 # Global settings instance

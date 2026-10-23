@@ -77,6 +77,8 @@ class UnifiedActivityService:
         self,
         activity_filter: Optional[ActivityFilter] = None,
         all_pages: bool = False,
+        *,
+        include_gear: bool = True,
     ) -> List[Activity]:
         """Get activities from both sources, merged and sorted."""
         if self.strava_is_live():
@@ -107,6 +109,7 @@ class UnifiedActivityService:
                 garmin_activities = await self.garmin.get_activities(
                     after=garmin_after,
                     before=garmin_before,
+                    include_gear=include_gear,
                 )
                 # Apply additional filters
                 if activity_filter:

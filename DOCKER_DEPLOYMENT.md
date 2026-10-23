@@ -475,6 +475,30 @@ docker stack deploy -c docker-compose.yml strava
 
 ## ✅ Итоговый чеклист для развертывания
 
+Для основного бота после перехода на Garmin Compose задаёт
+`BOT_TIMEZONE=Europe/Moscow`. Он напоминает проверить Gear в Strava по
+тренировкам Garmin за сегодня. После обновления основного сервиса
+(`docker compose up -d --no-deps --build --force-recreate strava-noshoes`)
+отправьте основному боту `/schedule 21:00`: время будет 21:00 по Москве,
+независимо от часового пояса сервера. Расписание второго бота не меняется.
+
+Для общего бота настройте в основном `.env` `BOT_PRIMARY_USER_ID` и
+`BOT_SECONDARY_USER_ID` (оба разные и ненулевые) и используйте один
+`BOT_API_TOKEN`. Основной контейнер обслуживает обоих пользователей,
+читая второй аккаунт по внутреннему API
+`http://strava-noshoes-secondary:8000`. В Compose для Secondary задано
+`BOT_ENABLED=false`: второй polling не запускается, API и бэкап работают.
+После настройки пересоздайте оба сервиса:
+
+```bash
+docker compose --profile secondary up -d --no-deps --build --force-recreate strava-noshoes-secondary strava-noshoes
+```
+
+Оба пользователя отправляют общему боту `/start` и каждый устанавливает
+своё время через `/schedule HH:MM`. Проверка `/check` и `/stop` относятся
+только к аккаунту отправителя. Подробности и миграция состояния —
+в `MULTI_INSTANCE.md`.
+
 Для двух аккаунтов используйте настройки из `MULTI_INSTANCE.md`: основной
 экземпляр на `8000` переключается на Garmin по дате, второй на `8001`
 остаётся на Strava (`MIGRATION_ENABLED=false`, `GARMIN_SYNC_ENABLED=false`
