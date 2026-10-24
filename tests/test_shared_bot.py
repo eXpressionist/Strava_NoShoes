@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from pydantic import ValidationError
@@ -32,12 +32,14 @@ def shared_bot(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "bot_secondary_user_id", 202)
     monkeypatch.setattr(settings, "bot_secondary_api_url", "http://secondary:8000")
     monkeypatch.setattr(settings, "bot_timezone", "Europe/Moscow")
+    monkeypatch.setattr(settings, "bot_secondary_default_gear_by_sport", {})
     monkeypatch.setattr(settings, "migration_enabled", True)
     monkeypatch.setattr(settings, "migration_cutoff", "2000-10-15")
     bot = BotService()
     bot.application = SimpleNamespace(
         bot=SimpleNamespace(send_message=AsyncMock(), send_document=AsyncMock())
     )
+    bot.user_services[202].get_activities = AsyncMock(return_value=[])
     return bot
 
 
@@ -82,14 +84,12 @@ async def test_scheduled_notifications_use_the_correct_backend_and_recipient(
         source="garmin", sport_type="Run", start_date=started, gear_id=None
     )
     secondary_activity = SimpleNamespace(
-        id=456, source="strava", name="Wife's run", start_date=started
+        source="strava", sport_type="Run", start_date=started, gear_id="wife-shoes"
     )
     primary = AsyncMock(return_value=[primary_activity])
     secondary = AsyncMock(return_value=[secondary_activity])
     monkeypatch.setattr(shared_bot.activity_service, "get_activities", primary)
-    monkeypatch.setattr(
-        shared_bot.user_services[202], "get_activities_without_gear", secondary
-    )
+    monkeypatch.setattr(shared_bot.user_services[202], "get_activities", secondary)
 
     await asyncio.gather(
         shared_bot.scheduled_check(101), shared_bot.scheduled_check(202)
@@ -100,10 +100,10 @@ async def test_scheduled_notifications_use_the_correct_backend_and_recipient(
         for call in shared_bot.application.bot.send_message.call_args_list
     }
     assert "Сегодня у вас была активность" in messages[101]
-    assert "Wife's run" not in messages[101]
-    assert "Wife's run" in messages[202]
-    assert "https://www.strava.com/activities/456" in messages[202]
-    assert "Сегодня у вас была активность" not in messages[202]
+    assert "указали ли вы Gear" in messages[101]
+    assert "Сегодня у вас была активность" in messages[202]
+    assert "правильно ли указана экипировка" in messages[202]
+    assert shared_bot.application.bot.send_message.await_count == 2
     primary.assert_awaited_once()
     secondary.assert_awaited_once()
 
@@ -117,8 +117,11 @@ async def test_manual_check_is_routed_per_user(shared_bot, monkeypatch):
     await shared_bot.check_command(update_for(101), None)
     await shared_bot.check_command(update_for(202), None)
 
-    reminder.assert_awaited_once_with(101, silent_if_empty=False)
-    missing_gear.assert_awaited_once_with(202, days_back=7, silent_if_empty=False)
+    assert reminder.await_args_list == [
+        call(101, silent_if_empty=False),
+        call(202, silent_if_empty=False),
+    ]
+    missing_gear.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -220,3 +223,132 @@ def test_invalid_user_bindings_are_rejected(primary, secondary):
         Settings(
             _env_file=None, bot_primary_user_id=primary, bot_secondary_user_id=secondary
         )
+
+
+def secondary_activity(bot, **changes):
+    midnight = datetime.now(bot.scheduler.timezone).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    fields = dict(
+        source="strava",
+        sport_type="Run",
+        start_date=(midnight + timedelta(hours=1)).astimezone(timezone.utc),
+        gear_id=None,
+    )
+    fields.update(changes)
+    return SimpleNamespace(**fields)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sport_type,gear_id",
+    [
+        ("Run", None),
+        ("Run", "old-shoes"),
+        ("Run", "new-shoes"),
+        ("TrailRun", "trail-shoes"),
+        ("Ride", "bike"),
+    ],
+)
+async def test_secondary_reminds_regardless_of_gear_and_old_defaults(
+    shared_bot, monkeypatch, sport_type, gear_id
+):
+    monkeypatch.setattr(
+        settings, "bot_secondary_default_gear_by_sport", {"Run": "old-shoes"}
+    )
+    service = shared_bot.user_services[202]
+    service.get_activities.return_value = [
+        secondary_activity(shared_bot, sport_type=sport_type, gear_id=gear_id)
+    ]
+    service.get_activities_without_gear = AsyncMock()
+    service.get_gear_by_id = AsyncMock()
+
+    await shared_bot.scheduled_check(202)
+
+    shared_bot.application.bot.send_message.assert_awaited_once()
+    message = shared_bot.application.bot.send_message.call_args.kwargs
+    assert message["chat_id"] == 202
+    assert "правильно ли указана экипировка" in message["text"]
+    assert 'href="https://www.strava.com"' in message["text"]
+    assert "по умолчанию" not in message["text"]
+    assert "без Gear" not in message["text"]
+    service.get_activities_without_gear.assert_not_awaited()
+    service.get_gear_by_id.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_secondary_reminder_uses_moscow_calendar_day(shared_bot):
+    midnight = datetime.now(shared_bot.scheduler.timezone).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    service = shared_bot.user_services[202]
+    service.get_activities.return_value = [
+        secondary_activity(shared_bot, start_date=midnight - timedelta(seconds=1)),
+        secondary_activity(shared_bot, start_date=midnight),
+        secondary_activity(shared_bot),
+        secondary_activity(shared_bot, start_date=midnight + timedelta(days=1)),
+        secondary_activity(shared_bot, sport_type="WeightTraining"),
+        secondary_activity(shared_bot, source="garmin"),
+    ]
+
+    await shared_bot.scheduled_check(202)
+
+    message = shared_bot.application.bot.send_message.call_args.kwargs["text"]
+    assert "Сегодня у вас были активности (2)" in message
+    activity_filter = service.get_activities.call_args.args[0]
+    assert activity_filter.after == midnight - timedelta(seconds=1)
+    assert activity_filter.before == midnight + timedelta(days=1)
+    assert activity_filter.after.utcoffset() == timedelta(0)
+    assert activity_filter.has_gear is None
+    assert activity_filter.gear_id is None
+    assert service.get_activities.call_args.kwargs == {
+        "all_pages": True,
+        "include_gear": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strength_only", [False, True])
+async def test_secondary_is_quiet_without_eligible_activities(
+    shared_bot, strength_only
+):
+    shared_bot.user_services[202].get_activities.return_value = (
+        [secondary_activity(shared_bot, sport_type="WeightTraining")]
+        if strength_only
+        else []
+    )
+
+    await shared_bot.scheduled_check(202)
+
+    shared_bot.application.bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_secondary_manual_check_reports_empty_day(shared_bot):
+    await shared_bot.check_command(update_for(202), None)
+
+    shared_bot.application.bot.send_message.assert_awaited_once()
+    message = shared_bot.application.bot.send_message.call_args.kwargs
+    assert message["chat_id"] == 202
+    assert "Сегодня нет активностей" in message["text"]
+
+
+@pytest.mark.asyncio
+async def test_secondary_failure_does_not_report_a_workout(shared_bot):
+    shared_bot.user_services[202].get_activities.side_effect = RuntimeError(
+        "Unavailable"
+    )
+
+    await shared_bot.scheduled_check(202)
+
+    shared_bot.application.bot.send_message.assert_awaited_once()
+    message = shared_bot.application.bot.send_message.call_args.kwargs
+    assert message["chat_id"] == 202
+    assert "Не удалось проверить" in message["text"]
+    assert "была активность" not in message["text"]
+
+
+def test_obsolete_default_gear_setting_still_loads(tmp_path):
+    path = tmp_path / "settings.env"
+    path.write_text('BOT_SECONDARY_DEFAULT_GEAR_BY_SPORT={"Run":"old-shoes"}\n')
+    Settings(_env_file=path)

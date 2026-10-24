@@ -47,6 +47,10 @@ class Settings(BaseSettings):
         default="http://strava-noshoes-secondary:8000",
         description="Internal URL of the secondary Strava-only instance",
     )
+    bot_secondary_default_gear_by_sport: dict[str, str] = Field(
+        default_factory=dict,
+        description="Deprecated; ignored by general Gear reminders",
+    )
     bot_state_file: str = Field(
         default="data/bot_state.json", description="Path to store bot state"
     )

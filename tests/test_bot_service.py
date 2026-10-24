@@ -131,7 +131,9 @@ async def test_manual_check_uses_same_reminder_and_reports_empty_day(
 
 
 @pytest.mark.asyncio
-async def test_secondary_keeps_existing_missing_gear_check(reminder_bot, monkeypatch):
+async def test_legacy_strava_account_keeps_missing_gear_check(
+    reminder_bot, monkeypatch
+):
     monkeypatch.setattr(settings, "migration_enabled", False)
     missing_gear = AsyncMock()
     reminder = AsyncMock()

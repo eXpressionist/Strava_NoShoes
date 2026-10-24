@@ -67,6 +67,12 @@ class BotService:
             raise PermissionError("Telegram user is not linked to an account")
         return self.user_services[chat_id]
 
+    def _uses_gear_reminder(self, chat_id: int) -> bool:
+        return (
+            bool(self.user_services)
+            or not self._service_for_chat(chat_id).strava_is_live()
+        )
+
     def _subscriber_state(self, chat_id: int) -> dict:
         self._service_for_chat(chat_id)
         if not self.user_services:
@@ -148,7 +154,7 @@ class BotService:
         if not await self._authorize(update):
             return
         logger.info(f"Manual check triggered by {update.effective_chat.id}")
-        if not self._service_for_chat(update.effective_chat.id).strava_is_live():
+        if self._uses_gear_reminder(update.effective_chat.id):
             await update.message.reply_text(
                 "Проверяю сегодняшние активности для напоминания о Gear в Strava..."
             )
@@ -420,36 +426,47 @@ class BotService:
             logger.warning("Scheduled check has no linked subscriber")
             return
         if chat_id:
-            if self._service_for_chat(chat_id).strava_is_live():
+            if self._uses_gear_reminder(chat_id):
+                await self.remind_strava_gear(chat_id)
+            else:
                 await self.check_activities_without_gear(
                     chat_id, days_back=1, silent_if_empty=True
                 )
-            else:
-                await self.remind_strava_gear(chat_id)
         else:
             logger.warning("Scheduled check triggered but no chat_id found.")
 
     async def remind_strava_gear(self, chat_id: int, silent_if_empty: bool = True):
-        """Remind Garmin users to check today's gear in Strava, without inferring it."""
+        """Remind users to check today's gear in Strava, without inferring it."""
         if not self.application:
             logger.warning("Bot application not initialized")
             return
 
         try:
+            service = self._service_for_chat(chat_id)
+            source = "strava" if service.strava_is_live() else "garmin"
             now = datetime.now(self.scheduler.timezone)
             day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
             day_end = day_start + timedelta(days=1)
+            after = day_start.astimezone(timezone.utc)
+            before = day_end.astimezone(timezone.utc)
+            if source == "strava":
+                # Strava's "after" is exclusive; include midnight for filtering.
+                after -= timedelta(seconds=1)
+            else:
+                # Garmin and the local archive use naive UTC timestamps.
+                after = after.replace(tzinfo=None)
+                before = before.replace(tzinfo=None)
             activity_filter = ActivityFilter(
-                after=day_start.astimezone(timezone.utc).replace(tzinfo=None),
-                before=day_end.astimezone(timezone.utc).replace(tzinfo=None),
+                after=after,
+                before=before,
             )
-            activities = await self._service_for_chat(chat_id).get_activities(
+            activities = await service.get_activities(
                 activity_filter, all_pages=True, include_gear=False
             )
 
             activities_today = []
             for activity in activities:
-                if activity.source != "garmin" or not requires_gear(activity):
+                if activity.source != source or not requires_gear(activity):
                     continue
                 started_at = activity.start_date
                 if started_at.tzinfo is None:
@@ -470,12 +487,17 @@ class BotService:
                 if len(activities_today) == 1
                 else f"Сегодня у вас были активности ({len(activities_today)})."
             )
+            gear_prompt = (
+                "правильно ли указана экипировка."
+                if source == "strava"
+                else "указали ли вы Gear."
+            )
             await self.application.bot.send_message(
                 chat_id=chat_id,
                 text=(
                     f"🏃 {activity_text}\n"
                     'Проверьте в <a href="https://www.strava.com">Strava</a>, '
-                    "указали ли вы Gear."
+                    f"{gear_prompt}"
                 ),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
