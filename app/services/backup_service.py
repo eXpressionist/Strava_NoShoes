@@ -17,6 +17,7 @@ from app.models.database import (
     async_session,
     init_db,
 )
+from app.services.garmin_health_service import garmin_health_scheduler
 from scripts.backup_garmin import GarminBackup
 from scripts.backup_strava import StravaBackup
 
@@ -111,6 +112,7 @@ class StravaBackupScheduler:
             garmin_gear = await session.scalar(
                 select(func.count(GearDB.id)).where(GearDB.source == "garmin")
             )
+            garmin_health = await garmin_health_scheduler.status(session)
 
         return {
             "enabled": settings.strava_backup_enabled,
@@ -127,6 +129,7 @@ class StravaBackupScheduler:
             "last_finished_at": self.last_finished_at,
             "last_result": self.last_result,
             "last_error": self.last_error,
+            "garmin_health": garmin_health,
             "database": {
                 "activities": total or 0,
                 "latest_activity_at": latest,

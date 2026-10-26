@@ -2,6 +2,7 @@
 
 import inspect
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -9,25 +10,28 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.api.routes import router as api_router
 from app.api.forecast_routes import router as forecast_router
+from app.api.routes import router as api_router
 from app.config import settings
-
-from contextlib import asynccontextmanager
 from app.services.backup_service import backup_scheduler
 from app.services.bot_service import BotService
+from app.services.garmin_health_service import garmin_health_scheduler
 
 # Bot service instance
 bot_service = BotService()
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Keep the API responsive while the resumable backup runs in the background.
+    await garmin_health_scheduler.start()
     await backup_scheduler.start()
     await bot_service.initialize()
     yield
     await backup_scheduler.shutdown()
+    await garmin_health_scheduler.shutdown()
     await bot_service.shutdown()
+
 
 # Create FastAPI app
 app = FastAPI(
@@ -36,7 +40,7 @@ app = FastAPI(
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Create necessary directories
@@ -60,6 +64,7 @@ def render_template(request: Request, name: str):
         return templates.TemplateResponse(request=request, name=name, context=context)
     return templates.TemplateResponse(name, context)
 
+
 # Include API routes
 app.include_router(api_router, prefix="/api/v1", tags=["Strava API"])
 app.include_router(forecast_router, prefix="/api/v1", tags=["Race Forecast"])
@@ -80,18 +85,15 @@ async def race_forecast_page(request: Request):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "app": "Strava NoShoes",
-        "version": "0.1.0"
-    }
+    return {"status": "healthy", "app": "Strava NoShoes", "version": "0.1.0"}
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "app.main:app",
         host=settings.app_host,
         port=settings.app_port,
-        reload=settings.app_debug
+        reload=settings.app_debug,
     )

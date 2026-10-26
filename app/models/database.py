@@ -5,10 +5,20 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Column, Integer, Float, String, Boolean, DateTime, Text, ForeignKey,
-    create_engine, Index
+    JSON,
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    create_engine,
 )
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 from app.config import settings
@@ -20,6 +30,7 @@ class Base(DeclarativeBase):
 
 class ActivityDB(Base):
     """Activities table — stores both Strava backup and Garmin activities."""
+
     __tablename__ = "activities"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -82,7 +93,9 @@ class ActivityDB(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    streams = relationship("ActivityStreamDB", back_populates="activity", cascade="all, delete-orphan")
+    streams = relationship(
+        "ActivityStreamDB", back_populates="activity", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("idx_source_source_id", "source", "source_id", unique=True),
@@ -94,6 +107,7 @@ class ActivityDB(Base):
 
 class GearDB(Base):
     """Gear/equipment table."""
+
     __tablename__ = "gear"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -122,17 +136,40 @@ class GearDB(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    __table_args__ = (Index("idx_gear_source_id", "source", "source_id", unique=True),)
+
+
+class GarminHealthDB(Base):
+    """Unmodified daily Garmin responses, including intraday sensor series.
+
+    One row per metric and Garmin-local calendar day. JSON null and empty
+    responses record a successful fetch with no data, rather than a zero value.
+    """
+
+    __tablename__ = "garmin_health"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    calendar_date = Column(Date, nullable=False)
+    metric = Column(String(50), nullable=False)
+    payload = Column(JSON, nullable=True)
+    has_data = Column(Boolean, nullable=False)
+    fetched_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
     __table_args__ = (
-        Index("idx_gear_source_id", "source", "source_id", unique=True),
+        Index("idx_garmin_health_metric_date", "metric", "calendar_date", unique=True),
+        Index("idx_garmin_health_date", "calendar_date"),
     )
 
 
 class ActivityStreamDB(Base):
     """Activity GPS/sensor streams for GPX generation."""
+
     __tablename__ = "activity_streams"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    activity_id = Column(Integer, ForeignKey("activities.id", ondelete="CASCADE"), nullable=False)
+    activity_id = Column(
+        Integer, ForeignKey("activities.id", ondelete="CASCADE"), nullable=False
+    )
 
     # Stream point index
     point_index = Column(Integer, nullable=False)
@@ -153,9 +190,7 @@ class ActivityStreamDB(Base):
     # Relationships
     activity = relationship("ActivityDB", back_populates="streams")
 
-    __table_args__ = (
-        Index("idx_stream_activity", "activity_id", "point_index"),
-    )
+    __table_args__ = (Index("idx_stream_activity", "activity_id", "point_index"),)
 
 
 # Database engine setup

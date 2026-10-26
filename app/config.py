@@ -1,6 +1,9 @@
 """Application configuration using Pydantic Settings."""
 
-from pydantic import Field, model_validator
+from datetime import date
+from zoneinfo import ZoneInfo
+
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -122,6 +125,32 @@ class Settings(BaseSettings):
         ge=1,
         description="Days to re-sync so late Garmin gear edits are captured",
     )
+    garmin_health_sync_enabled: bool = Field(default=True)
+    garmin_health_sync_interval_hours: int = Field(default=6, ge=1, le=168)
+    garmin_health_history_days: int = Field(default=90, ge=1, le=36500)
+    garmin_health_lookback_days: int = Field(default=7, ge=1, le=31)
+    garmin_health_backfill_days_per_run: int = Field(default=7, ge=1, le=31)
+    garmin_health_start_date: str = Field(
+        default="", description="Optional first health history date (YYYY-MM-DD)"
+    )
+    garmin_health_request_delay_seconds: float = Field(default=0.5, ge=0, le=60)
+    garmin_health_timezone: str = Field(default="Europe/Moscow")
+
+    @field_validator("garmin_health_start_date")
+    @classmethod
+    def validate_health_start_date(cls, value: str) -> str:
+        if value:
+            date.fromisoformat(value)
+        return value
+
+    @field_validator("garmin_health_timezone")
+    @classmethod
+    def validate_health_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (KeyError, ValueError) as exc:
+            raise ValueError("Use a valid IANA timezone") from exc
+        return value
 
     @model_validator(mode="after")
     def validate_bot_user_ids(self):
