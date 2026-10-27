@@ -13,7 +13,7 @@ python-telegram-bot>=20.7
 apscheduler>=3.10.4
 
 # Garmin Connect integration
-garminconnect>=0.3.2
+garminconnect>=0.3.19,<0.4
 
 # Database
 sqlalchemy[asyncio]>=2.0.0
