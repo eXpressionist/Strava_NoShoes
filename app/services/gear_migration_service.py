@@ -9,7 +9,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from app.services.garmin_service import GarminService
-from app.services.strava_service import StravaService
+from app.services.strava_archive import StravaArchive
 
 
 def gear_uuid(item: dict) -> str:
@@ -21,8 +21,21 @@ def gear_type(item: dict) -> str:
     return str(value.get("typeKey", "") if isinstance(value, dict) else value).upper()
 
 
-def marker(source_id: str, athlete_id: int) -> str:
-    return f"[noshoes:strava:{athlete_id}:{source_id}]"
+def marker(source_id: str, athlete_id: int | None) -> str:
+    return f"[noshoes:strava:{athlete_id or 'archive'}:{source_id}]"
+
+
+def activity_start(raw: dict, source: str) -> datetime:
+    summary = raw.get("summaryDTO", raw) if source == "garmin" else raw
+    timestamp = (
+        summary.get("startTimeGMT") if source == "garmin" else raw.get("start_date")
+    )
+    started = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    return (
+        started.replace(tzinfo=timezone.utc)
+        if started.tzinfo is None
+        else started.astimezone(timezone.utc)
+    )
 
 
 def family(sport: str) -> str:
@@ -73,16 +86,8 @@ class MigrationActivity:
     @classmethod
     def parse(cls, raw: dict, source: str) -> "MigrationActivity":
         summary = raw.get("summaryDTO", raw) if source == "garmin" else raw
-        timestamp = (
-            summary.get("startTimeGMT") if source == "garmin" else raw.get("start_date")
-        )
         # Never substitute local time or now for a missing/invalid UTC timestamp.
-        started = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
-        started = (
-            started.replace(tzinfo=timezone.utc)
-            if started.tzinfo is None
-            else started.astimezone(timezone.utc)
-        )
+        started = activity_start(raw, source)
         sport = raw.get("activityType") or raw.get("activityTypeDTO") or {}
         sport = (
             sport.get("typeKey", "")
@@ -157,11 +162,11 @@ def match_activities(
 class GearMigration:
     def __init__(
         self,
-        strava: StravaService | None = None,
+        source: StravaArchive | None = None,
         garmin: GarminService | None = None,
         delay: float = 0.5,
     ):
-        self.strava = strava or StravaService()
+        self.source = source or StravaArchive()
         self.garmin = garmin or GarminService()
         self.delay = delay
 
@@ -197,48 +202,73 @@ class GearMigration:
             raise ValueError("Unexpected Garmin activity gear response")
         return payload
 
+    async def _all_garmin_activities(self) -> list[dict]:
+        """Find the actual earliest activity without assuming a date or sort filter."""
+        result = {}
+        for start in range(0, 100000, 100):
+            page = await self._call("get_activities", start=start, limit=100)
+            if isinstance(page, dict):
+                page = page.get("activityList")
+            if not isinstance(page, list) or any(
+                not isinstance(item, dict) or not item.get("activityId")
+                for item in page
+            ):
+                raise ValueError("Unexpected Garmin activities response")
+            previous_count = len(result)
+            for item in page:
+                activity_id = item["activityId"]
+                if activity_id in result and result[activity_id] != item:
+                    raise ValueError("Conflicting duplicate Garmin activity IDs")
+                result[activity_id] = item
+            if len(page) < 100:
+                return list(result.values())
+            if len(result) == previous_count:
+                raise ValueError("Garmin activity pagination did not advance")
+        raise ValueError("Garmin activity pagination limit exceeded")
+
     async def build_plan(
         self,
-        first: date,
+        first: date | None,
         last: date,
         timezone_name: str = "Europe/Moscow",
         mapping: dict[str, str] | None = None,
     ) -> dict:
-        if last < first:
+        if first is not None and last < first:
             raise ValueError("End date must not precede start date")
         zone = ZoneInfo(timezone_name)
+        coverage = await self.source.coverage()
+        athlete_id = await self.source.identity()
+        raw_targets = None
+        from_first_garmin = first is None
+        if first is None:
+            await self.garmin._ensure_connected()
+            raw_targets = await self._all_garmin_activities()
+            starts = []
+            for raw in raw_targets:
+                try:
+                    starts.append(activity_start(raw, "garmin"))
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            if not starts:
+                raise ValueError("Garmin has no activities with a valid UTC start date")
+            first = min(starts).astimezone(zone).date()
+            if last < first:
+                raise ValueError("End date precedes the first Garmin activity")
         lower = datetime.combine(first, time.min, zone).astimezone(timezone.utc)
         upper = datetime.combine(last + timedelta(days=1), time.min, zone).astimezone(
             timezone.utc
         )
-        await self.garmin._ensure_connected()
-        athlete = await self.strava._make_request("GET", "/athlete")
-        athlete_id = int(athlete["id"])
-        raw_sources = []
-        for page in range(1, 1001):
-            batch = await self.strava._make_request(
-                "GET",
-                "/athlete/activities",
-                params={
-                    "after": int(lower.timestamp()) - 1,
-                    "before": int(upper.timestamp()),
-                    "page": page,
-                    "per_page": 200,
-                },
+        raw_sources = await self.source.activities(lower, upper)
+        if not raw_sources:
+            raise ValueError("No archived Strava activities in the selected date range")
+        if raw_targets is None:
+            await self.garmin._ensure_connected()
+            # Pad Garmin's local date search, then enforce identical UTC bounds below.
+            raw_targets = await self._call(
+                "get_activities_by_date",
+                (first - timedelta(days=1)).isoformat(),
+                (last + timedelta(days=1)).isoformat(),
             )
-            if not isinstance(batch, list):
-                raise ValueError("Unexpected Strava activities response")
-            raw_sources.extend(batch)
-            if len(batch) < 200:
-                break
-        else:
-            raise ValueError("Strava pagination limit exceeded")
-        # Pad Garmin's local date search, then enforce identical UTC bounds below.
-        raw_targets = await self._call(
-            "get_activities_by_date",
-            (first - timedelta(days=1)).isoformat(),
-            (last + timedelta(days=1)).isoformat(),
-        )
         if not isinstance(raw_targets, list):
             raise ValueError("Unexpected Garmin activities response")
         invalid = []
@@ -270,7 +300,7 @@ class GearMigration:
         gear_plans = {}
         mapping = mapping or {}
         for source_id in sorted({a.gear_id for a in sources if a.gear_id}):
-            source_gear = await self.strava._make_request("GET", f"/gear/{source_id}")
+            source_gear = await self.source.gear(source_id)
             if str(source_gear.get("id")) != source_id:
                 raise ValueError("Strava gear ID mismatch")
             kind = (
@@ -335,9 +365,13 @@ class GearMigration:
                     "unsupported_gear"
                     if not kind
                     else (
-                        "ambiguous_gear"
-                        if len(candidates) > 1
-                        else "existing" if candidates else "create"
+                        "missing_gear_metadata"
+                        if not source_gear.get("name") and not candidates
+                        else (
+                            "ambiguous_gear"
+                            if len(candidates) > 1
+                            else "existing" if candidates else "create"
+                        )
                     )
                 ),
             }
@@ -364,7 +398,11 @@ class GearMigration:
             }
             if match["status"] == "matched":
                 row["garmin_activity_id"] = match["candidates"][0]
-                if gear["status"] in {"unsupported_gear", "ambiguous_gear"}:
+                if gear["status"] in {
+                    "unsupported_gear",
+                    "ambiguous_gear",
+                    "missing_gear_metadata",
+                }:
                     row["status"] = gear["status"]
                 else:
                     current = await self._activity_gear(row["garmin_activity_id"])
@@ -374,7 +412,9 @@ class GearMigration:
         return {
             "version": 1,
             "strava_athlete_id": athlete_id,
+            "archive": coverage,
             "from_date": first.isoformat(),
+            "from_first_garmin_activity": from_first_garmin,
             "to_date": last.isoformat(),
             "timezone": timezone_name,
             "garmin_activities": len(targets),
@@ -418,11 +458,8 @@ class GearMigration:
         }
         # Recheck account identity. The CLI supplies a fresh plan from this same
         # invocation; report files are outputs and are never executed as plans.
-        if (
-            int((await self.strava._make_request("GET", "/athlete"))["id"])
-            != plan["strava_athlete_id"]
-        ):
-            raise ValueError("Strava account changed during migration")
+        if await self.source.identity() != plan["strava_athlete_id"]:
+            raise ValueError("Strava archive account changed during migration")
         for row in plan["activities"]:
             if row["status"] == "already_linked":
                 result["already_linked"] += 1

@@ -59,6 +59,9 @@ class FakeGarmin:
     def get_activities_by_date(self, *args):
         return copy.deepcopy(self.activities)
 
+    def get_activities(self, start=0, limit=100):
+        return copy.deepcopy(self.activities[start : start + limit])
+
     def get_gear_list(self, start=0, limit=100, **kwargs):
         return copy.deepcopy(self.gear[start : start + limit])
 
@@ -99,7 +102,7 @@ class FakeGarmin:
 @pytest.fixture
 def migration():
     client = FakeGarmin()
-    strava = SimpleNamespace()
+    source = SimpleNamespace()
     activities = [strava_activity()]
     gear = {
         "g1": {
@@ -111,17 +114,21 @@ def migration():
         }
     }
 
-    async def request(method, endpoint, params=None):
-        assert method == "GET"
-        if endpoint == "/athlete":
-            return {"id": 42}
-        if endpoint == "/athlete/activities":
-            return copy.deepcopy(activities) if params["page"] == 1 else []
-        return copy.deepcopy(gear[endpoint.split("/")[-1]])
-
-    strava._make_request = AsyncMock(side_effect=request)
+    source.identity = AsyncMock(return_value=42)
+    source.coverage = AsyncMock(
+        return_value={
+            "source": "sqlite",
+            "activities": 1,
+            "first_activity_utc": "2026-10-20T06:00:00",
+            "latest_activity_utc": "2026-10-20T06:00:00",
+        }
+    )
+    source.activities = AsyncMock(side_effect=lambda *args: copy.deepcopy(activities))
+    source.gear = AsyncMock(
+        side_effect=lambda source_id: copy.deepcopy(gear[source_id])
+    )
     garmin = SimpleNamespace(client=client, _ensure_connected=AsyncMock())
-    return GearMigration(strava, garmin, delay=0), activities, gear, client
+    return GearMigration(source, garmin, delay=0), activities, gear, client
 
 
 def test_matching_requires_unique_time_sport_distance_and_duration():
@@ -285,7 +292,7 @@ async def test_interrupted_successful_writes_can_resume_without_duplicates(
 async def test_account_change_aborts_before_writes(migration):
     sync, activities, gear, client = migration
     plan = await sync.build_plan(FIRST, LAST)
-    sync.strava._make_request = AsyncMock(return_value={"id": 999})
+    sync.source.identity = AsyncMock(return_value=999)
     with pytest.raises(ValueError, match="account changed"):
         await sync.apply(plan, lambda event: None)
     assert client.writes == []
@@ -321,6 +328,52 @@ async def test_pagination_fetches_all_gear(migration):
 
 
 @pytest.mark.asyncio
+async def test_default_period_starts_with_first_garmin_activity_beyond_one_year(
+    migration,
+):
+    sync, activities, gear, client = migration
+    activities.append(strava_activity(2, start_date="2025-08-31T22:00:00Z"))
+    client.activities.append(garmin_activity(102, startTimeGMT="2025-08-31 22:00:00"))
+    plan = await sync.build_plan(None, LAST)
+    assert plan["from_date"] == "2025-09-01"  # Calendar date in Moscow.
+    assert plan["from_first_garmin_activity"] is True
+    assert plan["summary"] == {"link": 2}
+    assert plan["gear"]["g1"]["first_use_date"] == "2025-09-01"
+    explicit = await sync.build_plan(FIRST, LAST)
+    assert explicit["from_date"] == FIRST.isoformat()
+    assert explicit["from_first_garmin_activity"] is False
+    assert explicit["summary"] == {"link": 1}
+
+
+@pytest.mark.asyncio
+async def test_first_garmin_activity_is_found_on_later_pages(migration):
+    sync, activities, gear, client = migration
+    client.activities = [garmin_activity(1000 + index) for index in range(100)]
+    client.activities.append(garmin_activity(2000, startTimeGMT="2025-09-01 06:00:00"))
+    starts = []
+    original = client.get_activities
+
+    def page(start, limit):
+        starts.append(start)
+        return {"activityList": original(start, limit)}
+
+    client.get_activities = page
+    plan = await sync.build_plan(None, LAST)
+    assert starts == [0, 100]
+    assert plan["from_date"] == "2025-09-01"
+    assert plan["garmin_activities"] == 101
+
+
+@pytest.mark.asyncio
+async def test_empty_garmin_has_no_invented_start_date(migration):
+    sync, activities, gear, client = migration
+    client.activities = []
+    with pytest.raises(ValueError, match="no activities with a valid UTC start"):
+        await sync.build_plan(None, LAST)
+    assert client.writes == []
+
+
+@pytest.mark.asyncio
 async def test_cli_writes_report_and_journal_for_verified_assignments(
     migration, tmp_path, monkeypatch
 ):
@@ -330,14 +383,12 @@ async def test_cli_writes_report_and_journal_for_verified_assignments(
     from scripts import migrate_gear
 
     sync, activities, gear, client = migration
-    sync.strava.access_token = "test"
-    sync.strava.refresh_token = ""
     monkeypatch.setattr(settings, "garmin_email", "test@example.com")
     monkeypatch.setattr(settings, "garmin_password", "test")
     monkeypatch.setattr(migrate_gear, "GearMigration", lambda **kwargs: sync)
     args = SimpleNamespace(
         timezone="Europe/Moscow",
-        from_date=FIRST,
+        from_date=None,
         to_date=LAST,
         request_delay=0,
         gear_map=None,
@@ -354,6 +405,8 @@ async def test_cli_writes_report_and_journal_for_verified_assignments(
     args.apply = True
     assert await migrate_gear.run(args) == 0
     report = json.loads(args.report.read_text(encoding="utf-8"))
+    assert report["from_date"] == "2026-10-20"
+    assert report["from_first_garmin_activity"] is True
     events = [
         json.loads(line)
         for line in args.journal.read_text(encoding="utf-8").splitlines()

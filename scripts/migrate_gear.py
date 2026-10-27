@@ -52,20 +52,14 @@ def migration_lock():
 
 async def run(args: argparse.Namespace) -> int:
     today = datetime.now(ZoneInfo(args.timezone)).date()
-    try:
-        default_first = today.replace(year=today.year - 1)
-    except ValueError:
-        default_first = date(today.year - 1, 2, 28)
-    first, last = args.from_date or default_first, args.to_date or today
-    if first > last:
+    first, last = args.from_date, args.to_date or today
+    if first is not None and first > last:
         raise ValueError("--from-date must not be later than --to-date")
     migration = GearMigration(delay=args.request_delay)
     if not settings.garmin_email or not settings.garmin_password:
         raise ValueError(
             "Configure GARMIN_EMAIL and GARMIN_PASSWORD in the primary container"
         )
-    if not (migration.strava.access_token or migration.strava.refresh_token):
-        raise ValueError("Strava credentials or a saved Strava token are required")
     mapping = (
         json.loads(args.gear_map.read_text(encoding="utf-8")) if args.gear_map else {}
     )
@@ -76,13 +70,19 @@ async def run(args: argparse.Namespace) -> int:
             "--gear-map must contain a JSON object of Strava IDs to Garmin UUIDs"
         )
     print(
-        f"Matching Strava and Garmin activities: {first} through {last} ({args.timezone})",
+        f"Matching archived Strava and Garmin activities: {first or 'first Garmin activity'} through {last} ({args.timezone})",
         flush=True,
     )
     report = await migration.build_plan(first, last, args.timezone, mapping)
+    first = date.fromisoformat(report["from_date"])
+    print(f"Selected period: {first} through {last} ({args.timezone})", flush=True)
     report["mode"] = "apply" if args.apply else "dry_run"
     report["replace_existing"] = args.replace_existing
     write_report(args.report, report)
+    print(
+        f"Strava SQLite backup coverage: {report['archive']['first_activity_utc']} through {report['archive']['latest_activity_utc']} UTC",
+        flush=True,
+    )
     print(json.dumps(report["summary"], ensure_ascii=False), flush=True)
     print(f"Report: {args.report}", flush=True)
     if not args.apply:
@@ -126,7 +126,11 @@ async def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--from-date", type=date.fromisoformat)
+    parser.add_argument(
+        "--from-date",
+        type=date.fromisoformat,
+        help="First date; defaults to the first Garmin activity",
+    )
     parser.add_argument("--to-date", type=date.fromisoformat)
     parser.add_argument("--timezone", default="Europe/Moscow")
     parser.add_argument(
