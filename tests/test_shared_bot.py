@@ -1,8 +1,10 @@
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from pydantic import ValidationError
@@ -83,11 +85,14 @@ async def test_scheduled_notifications_use_the_correct_backend_and_recipient(
     primary_activity = SimpleNamespace(
         source="garmin", sport_type="Run", start_date=started, gear_id=None
     )
-    secondary_activity = SimpleNamespace(
-        source="strava", sport_type="Run", start_date=started, gear_id="wife-shoes"
-    )
     primary = AsyncMock(return_value=[primary_activity])
-    secondary = AsyncMock(return_value=[secondary_activity])
+    secondary = AsyncMock(
+        return_value=[
+            secondary_activity(
+                shared_bot, start_date=started, gear_id="g1", gear_name="Daily shoes"
+            )
+        ]
+    )
     monkeypatch.setattr(shared_bot.activity_service, "get_activities", primary)
     monkeypatch.setattr(shared_bot.user_services[202], "get_activities", secondary)
 
@@ -102,7 +107,7 @@ async def test_scheduled_notifications_use_the_correct_backend_and_recipient(
     assert "Сегодня у вас была активность" in messages[101]
     assert "указали ли вы Gear" in messages[101]
     assert "Сегодня у вас была активность" in messages[202]
-    assert "правильно ли указана экипировка" in messages[202]
+    assert "Указана экипировка (Gear) «Daily shoes»" in messages[202]
     assert shared_bot.application.bot.send_message.await_count == 2
     primary.assert_awaited_once()
     secondary.assert_awaited_once()
@@ -230,10 +235,13 @@ def secondary_activity(bot, **changes):
         hour=0, minute=0, second=0, microsecond=0
     )
     fields = dict(
+        id=456,
+        name="Пробежка <утро>",
         source="strava",
         sport_type="Run",
         start_date=(midnight + timedelta(hours=1)).astimezone(timezone.utc),
         gear_id=None,
+        gear_name=None,
     )
     fields.update(changes)
     return SimpleNamespace(**fields)
@@ -241,24 +249,26 @@ def secondary_activity(bot, **changes):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "sport_type,gear_id",
+    "sport_type,gear_id,gear_name,expected_gear",
     [
-        ("Run", None),
-        ("Run", "old-shoes"),
-        ("Run", "new-shoes"),
-        ("TrailRun", "trail-shoes"),
-        ("Ride", "bike"),
+        ("Run", None, None, None),
+        ("Run", "old-shoes", "Nike & Co", "Nike &amp; Co"),
+        ("Run", "new-shoes", None, "ID new-shoes"),
+        ("TrailRun", "trail-shoes", "Trail shoes", "Trail shoes"),
+        ("Ride", "bike", "Road bike", "Road bike"),
     ],
 )
 async def test_secondary_reminds_regardless_of_gear_and_old_defaults(
-    shared_bot, monkeypatch, sport_type, gear_id
+    shared_bot, monkeypatch, sport_type, gear_id, gear_name, expected_gear
 ):
     monkeypatch.setattr(
         settings, "bot_secondary_default_gear_by_sport", {"Run": "old-shoes"}
     )
     service = shared_bot.user_services[202]
     service.get_activities.return_value = [
-        secondary_activity(shared_bot, sport_type=sport_type, gear_id=gear_id)
+        secondary_activity(
+            shared_bot, sport_type=sport_type, gear_id=gear_id, gear_name=gear_name
+        )
     ]
     service.get_activities_without_gear = AsyncMock()
     service.get_gear_by_id = AsyncMock()
@@ -268,8 +278,18 @@ async def test_secondary_reminds_regardless_of_gear_and_old_defaults(
     shared_bot.application.bot.send_message.assert_awaited_once()
     message = shared_bot.application.bot.send_message.call_args.kwargs
     assert message["chat_id"] == 202
-    assert "правильно ли указана экипировка" in message["text"]
-    assert 'href="https://www.strava.com"' in message["text"]
+    if expected_gear:
+        assert f"Указана экипировка (Gear) «{expected_gear}»" in message["text"]
+        assert "Проверьте, правильно ли она выбрана." in message["text"]
+    else:
+        assert "Экипировка (Gear) не указана." in message["text"]
+    assert "Пробежка &lt;утро&gt;" in message["text"]
+    link = urlsplit(unescape(message["text"].split('href="')[1].split('"')[0]))
+    assert (link.scheme, link.netloc) == ("https", "strava.app.link")
+    assert parse_qs(link.query) == {
+        "$deeplink_path": ["activities/456"],
+        "$fallback_url": ["https://www.strava.com/activities/456"],
+    }
     assert "по умолчанию" not in message["text"]
     assert "без Gear" not in message["text"]
     service.get_activities_without_gear.assert_not_awaited()
@@ -284,10 +304,13 @@ async def test_secondary_reminder_uses_moscow_calendar_day(shared_bot):
     service = shared_bot.user_services[202]
     service.get_activities.return_value = [
         secondary_activity(shared_bot, start_date=midnight - timedelta(seconds=1)),
-        secondary_activity(shared_bot, start_date=midnight),
-        secondary_activity(shared_bot),
+        secondary_activity(shared_bot, start_date=midnight, name="Без кроссовок"),
+        secondary_activity(
+            shared_bot, id=457, name="Поездка", gear_id="b1", gear_name="Велосипед"
+        ),
         secondary_activity(shared_bot, start_date=midnight + timedelta(days=1)),
         secondary_activity(shared_bot, sport_type="WeightTraining"),
+        secondary_activity(shared_bot, sport_type="Yoga", name="Йога"),
         secondary_activity(shared_bot, source="garmin"),
     ]
 
@@ -295,6 +318,10 @@ async def test_secondary_reminder_uses_moscow_calendar_day(shared_bot):
 
     message = shared_bot.application.bot.send_message.call_args.kwargs["text"]
     assert "Сегодня у вас были активности (2)" in message
+    assert "Без кроссовок</a>\n👟 Экипировка (Gear) не указана." in message
+    assert "Поездка</a>\n👟 Указана экипировка (Gear) «Велосипед»" in message
+    assert "%24deeplink_path=activities%2F457" in message
+    assert "Йога" not in message
     activity_filter = service.get_activities.call_args.args[0]
     assert activity_filter.after == midnight - timedelta(seconds=1)
     assert activity_filter.before == midnight + timedelta(days=1)
@@ -303,19 +330,15 @@ async def test_secondary_reminder_uses_moscow_calendar_day(shared_bot):
     assert activity_filter.gear_id is None
     assert service.get_activities.call_args.kwargs == {
         "all_pages": True,
-        "include_gear": False,
+        "include_gear": True,
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("strength_only", [False, True])
-async def test_secondary_is_quiet_without_eligible_activities(
-    shared_bot, strength_only
-):
+@pytest.mark.parametrize("sport_type", [None, "WeightTraining", "Yoga", "Pilates"])
+async def test_secondary_is_quiet_without_eligible_activities(shared_bot, sport_type):
     shared_bot.user_services[202].get_activities.return_value = (
-        [secondary_activity(shared_bot, sport_type="WeightTraining")]
-        if strength_only
-        else []
+        [secondary_activity(shared_bot, sport_type=sport_type)] if sport_type else []
     )
 
     await shared_bot.scheduled_check(202)

@@ -4,11 +4,14 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from html import escape
 from typing import Optional
+from urllib.parse import urlencode
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import MessageLimit
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -19,7 +22,7 @@ from telegram.ext import (
 )
 
 from app.config import settings
-from app.models.strava import ActivityFilter
+from app.models.strava import Activity, ActivityFilter
 from app.services.gear_policy import requires_gear
 from app.services.remote_activity_service import RemoteActivityService
 from app.services.unified_service import UnifiedActivityService
@@ -30,6 +33,15 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+def _strava_activity_link(activity: Activity) -> str:
+    path = f"activities/{activity.id}"
+    query = urlencode(
+        {"$deeplink_path": path, "$fallback_url": f"https://www.strava.com/{path}"}
+    )
+    url = escape(f"https://strava.app.link/?{query}")
+    return f'<a href="{url}">{escape(activity.name)}</a>'
 
 
 class BotService:
@@ -155,9 +167,7 @@ class BotService:
             return
         logger.info(f"Manual check triggered by {update.effective_chat.id}")
         if self._uses_gear_reminder(update.effective_chat.id):
-            await update.message.reply_text(
-                "Проверяю сегодняшние активности для напоминания о Gear в Strava..."
-            )
+            await update.message.reply_text("Проверяю сегодняшние активности...")
             await self.remind_strava_gear(
                 update.effective_chat.id, silent_if_empty=False
             )
@@ -436,7 +446,7 @@ class BotService:
             logger.warning("Scheduled check triggered but no chat_id found.")
 
     async def remind_strava_gear(self, chat_id: int, silent_if_empty: bool = True):
-        """Remind users to check today's gear in Strava, without inferring it."""
+        """Remind users to check today's gear and show live Strava assignments."""
         if not self.application:
             logger.warning("Bot application not initialized")
             return
@@ -461,7 +471,7 @@ class BotService:
                 before=before,
             )
             activities = await service.get_activities(
-                activity_filter, all_pages=True, include_gear=False
+                activity_filter, all_pages=True, include_gear=source == "strava"
             )
 
             activities_today = []
@@ -487,17 +497,18 @@ class BotService:
                 if len(activities_today) == 1
                 else f"Сегодня у вас были активности ({len(activities_today)})."
             )
-            gear_prompt = (
-                "правильно ли указана экипировка."
-                if source == "strava"
-                else "указали ли вы Gear."
-            )
+            if source == "strava":
+                await self._send_strava_gear_reminder(
+                    chat_id, activity_text, activities_today
+                )
+                return
+
             await self.application.bot.send_message(
                 chat_id=chat_id,
                 text=(
                     f"🏃 {activity_text}\n"
                     'Проверьте в <a href="https://www.strava.com">Strava</a>, '
-                    f"{gear_prompt}"
+                    "указали ли вы Gear."
                 ),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
@@ -507,6 +518,34 @@ class BotService:
             await self.application.bot.send_message(
                 chat_id=chat_id,
                 text="Не удалось проверить сегодняшние активности. Попробуйте /check позже.",
+            )
+
+    async def _send_strava_gear_reminder(
+        self, chat_id: int, heading: str, activities: list[Activity]
+    ) -> None:
+        messages = [f"🏃 {heading}"]
+        for activity in activities:
+            if activity.gear_id:
+                gear = activity.gear_name or f"ID {activity.gear_id}"
+                status = (
+                    f"Указана экипировка (Gear) «{escape(gear)}». "
+                    "Проверьте, правильно ли она выбрана."
+                )
+            else:
+                status = "Экипировка (Gear) не указана."
+
+            entry = f"• {_strava_activity_link(activity)}\n👟 {status}"
+            if len(messages[-1]) + len(entry) + 2 > MessageLimit.MAX_TEXT_LENGTH:
+                messages.append(entry)
+            else:
+                messages[-1] += f"\n\n{entry}"
+
+        for message in messages:
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
             )
 
     async def check_activities_without_gear(
@@ -552,9 +591,10 @@ class BotService:
             for activity in activities[:10]:
                 if activity.source == "garmin":
                     link = f"https://connect.garmin.com/modern/activity/{activity.id}"
+                    activity_link = f'<a href="{link}">{escape(activity.name)}</a>'
                 else:
-                    link = f"https://www.strava.com/activities/{activity.id}"
-                message += f"• <a href='{link}'>{activity.name}</a> ({activity.start_date.strftime('%Y-%m-%d')})\n"
+                    activity_link = _strava_activity_link(activity)
+                message += f"• {activity_link} ({activity.start_date:%Y-%m-%d})\n"
 
             if len(activities) > 10:
                 message += f"\n...and {len(activities) - 10} more."

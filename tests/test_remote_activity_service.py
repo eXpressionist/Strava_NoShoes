@@ -100,7 +100,11 @@ async def test_secondary_reads_all_pages_for_today_without_filtering_gear(monkey
         page = int(request.url.params["page"])
         pages.append(page)
         activity = strava_activity()
-        activity.update(id=455 + page, gear_id=None if page == 1 else "new-shoes")
+        activity.update(
+            id=455 + page,
+            gear_id=None if page == 1 else "new-shoes",
+            gear_name=None if page == 1 else "Daily shoes",
+        )
         return httpx.Response(200, json={"items": [activity], "total_pages": 2})
 
     use_transport(monkeypatch, respond)
@@ -110,11 +114,11 @@ async def test_secondary_reads_all_pages_for_today_without_filtering_gear(monkey
             before=datetime(2026, 10, 23, 21, tzinfo=timezone.utc),
         ),
         all_pages=True,
-        include_gear=False,
+        include_gear=True,
     )
 
     assert pages == [1, 2]
-    assert [(item.id, item.gear_id) for item in activities] == [
-        (456, None),
-        (457, "new-shoes"),
+    assert [(item.id, item.gear_id, item.gear_name) for item in activities] == [
+        (456, None, None),
+        (457, "new-shoes", "Daily shoes"),
     ]

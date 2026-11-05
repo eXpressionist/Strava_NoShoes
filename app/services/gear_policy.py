@@ -3,8 +3,21 @@
 from app.models.strava import Activity
 
 GEAR_EXEMPT_SPORT_TYPES = frozenset({"WeightTraining"})
+STRAVA_GEAR_EXEMPT_SPORT_TYPES = GEAR_EXEMPT_SPORT_TYPES | {
+    "Crossfit",
+    "HighIntensityIntervalTraining",
+    "PhysicalTherapy",
+    "Pilates",
+    "Workout",
+    "Yoga",
+}
 
 
 def requires_gear(activity: Activity) -> bool:
     """Return whether missing gear should be reported for an activity."""
-    return activity.sport_type not in GEAR_EXEMPT_SPORT_TYPES
+    exempt_sports = (
+        STRAVA_GEAR_EXEMPT_SPORT_TYPES
+        if activity.source == "strava"
+        else GEAR_EXEMPT_SPORT_TYPES
+    )
+    return activity.sport_type not in exempt_sports
