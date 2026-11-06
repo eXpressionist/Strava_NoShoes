@@ -211,9 +211,10 @@ async def test_gpx_download_uses_subscriber_backend(shared_bot, tmp_path, monkey
         assert document["document"].name == str(path)
 
 
-def test_disabled_bot_keeps_cleanup_without_telegram(tmp_path, monkeypatch):
+def test_strava_only_startup_defers_unused_dependencies(tmp_path, monkeypatch):
     monkeypatch.setenv("BOT_ENABLED", "false")
     monkeypatch.setenv("GPX_CLEANUP_ENABLED", "true")
+    monkeypatch.setenv("MIGRATION_ENABLED", "false")
     monkeypatch.setenv("STRAVA_BACKUP_ENABLED", "false")
     monkeypatch.setenv("GARMIN_SYNC_ENABLED", "false")
     monkeypatch.setenv("GARMIN_HEALTH_SYNC_ENABLED", "false")
@@ -232,6 +233,7 @@ async def check_startup():
         assert bot_service.scheduler.get_job('gpx_cleanup') is not None
         assert 'telegram' not in sys.modules
         assert 'gpxpy' not in sys.modules
+        assert 'garminconnect' not in sys.modules
 
 
 asyncio.run(check_startup())

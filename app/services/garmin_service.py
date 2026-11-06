@@ -7,20 +7,14 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
-
-try:
-    from garminconnect import Garmin, GarminConnectAuthenticationError
-except ImportError:  # Strava remains usable before cutover in minimal installs.
-    Garmin = None
-
-    class GarminConnectAuthenticationError(Exception):
-        pass
-
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from app.config import settings
 from app.models.strava import Activity, Gear  # Reuse existing Pydantic models
 from app.services.gear_policy import requires_gear
+
+if TYPE_CHECKING:
+    from garminconnect import Garmin
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +44,10 @@ class GarminService:
             raise GarminAPIError(
                 "Garmin credentials not configured. Set GARMIN_EMAIL and GARMIN_PASSWORD."
             )
-        if Garmin is None:
-            raise GarminAPIError("garminconnect dependency is not installed")
+        try:
+            from garminconnect import Garmin, GarminConnectAuthenticationError
+        except ImportError as e:
+            raise GarminAPIError("garminconnect dependency is not installed") from e
 
         try:
             self.client = Garmin(self.email, self.password)
@@ -202,6 +198,8 @@ class GarminService:
     ) -> List[Activity]:
         """Get activities from Garmin Connect."""
         await self._ensure_connected()
+
+        from garminconnect import GarminConnectAuthenticationError
 
         try:
             if after or before:
