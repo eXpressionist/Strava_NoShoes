@@ -10,7 +10,9 @@ The bot and REST API use this service exclusively.
 
 import json
 import logging
+import os
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -28,11 +30,6 @@ from app.models.strava import Activity, Gear, ActivityFilter
 from app.services.garmin_service import GarminService, GarminAPIError
 from app.services.gear_policy import requires_gear
 from app.services.strava_service import StravaAPIError, StravaService
-
-import gpxpy
-import gpxpy.gpx
-import os
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -363,9 +360,18 @@ class UnifiedActivityService:
                         query = query.where(ActivityDB.gear_id == None)
                 if activity_filter.gear_id:
                     query = query.where(ActivityDB.gear_id == activity_filter.gear_id)
-            query = query.order_by(ActivityDB.start_date.desc())
-            result = await session.execute(query)
-            return [self._db_to_model(a) for a in result.scalars().all()]
+            # Convert batches so the raw archive rows do not all stay in memory.
+            query = query.order_by(ActivityDB.start_date.desc()).execution_options(
+                yield_per=200
+            )
+            activities: List[Activity] = []
+            result = await session.stream_scalars(query)
+            try:
+                async for batch in result.partitions():
+                    activities.extend(self._db_to_model(row) for row in batch)
+            finally:
+                await result.close()
+            return activities
 
     def _db_to_model(self, db: ActivityDB) -> Activity:
         """Convert DB record to Pydantic Activity model."""
@@ -460,6 +466,8 @@ class UnifiedActivityService:
             raise UnifiedServiceError(
                 f"No stream data stored for activity {db_activity.source_id}"
             )
+
+        import gpxpy.gpx
 
         # Build GPX
         gpx = gpxpy.gpx.GPX()

@@ -1,16 +1,17 @@
 import asyncio
 import json
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, call
+from unittest.mock import AsyncMock, call
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from pydantic import ValidationError
 
 from app.config import Settings, settings
-from app.services import bot_service
 from app.services.bot_service import BotService
 
 
@@ -210,16 +211,32 @@ async def test_gpx_download_uses_subscriber_backend(shared_bot, tmp_path, monkey
         assert document["document"].name == str(path)
 
 
-@pytest.mark.asyncio
-async def test_disabled_instance_never_starts_polling(shared_bot, monkeypatch):
-    monkeypatch.setattr(settings, "bot_enabled", False)
-    monkeypatch.setattr(settings, "gpx_cleanup_enabled", True)
-    builder = Mock(side_effect=AssertionError("Polling must stay disabled"))
-    monkeypatch.setattr(bot_service.Application, "builder", builder)
-    await shared_bot.initialize()
-    builder.assert_not_called()
-    assert shared_bot.scheduler.get_job("gpx_cleanup") is not None
-    shared_bot.scheduler.shutdown(wait=False)
+def test_disabled_bot_keeps_cleanup_without_telegram(tmp_path, monkeypatch):
+    monkeypatch.setenv("BOT_ENABLED", "false")
+    monkeypatch.setenv("GPX_CLEANUP_ENABLED", "true")
+    monkeypatch.setenv("STRAVA_BACKUP_ENABLED", "false")
+    monkeypatch.setenv("GARMIN_SYNC_ENABLED", "false")
+    monkeypatch.setenv("GARMIN_HEALTH_SYNC_ENABLED", "false")
+    monkeypatch.setenv("GPX_STORAGE_PATH", str(tmp_path / "gpx"))
+
+    script = """
+import asyncio
+import sys
+
+from app.main import app, bot_service, lifespan
+
+
+async def check_startup():
+    async with lifespan(app):
+        assert bot_service.application is None
+        assert bot_service.scheduler.get_job('gpx_cleanup') is not None
+        assert 'telegram' not in sys.modules
+        assert 'gpxpy' not in sys.modules
+
+
+asyncio.run(check_startup())
+"""
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=30)
 
 
 @pytest.mark.parametrize("primary,secondary", [(101, 0), (0, 202), (101, 101)])

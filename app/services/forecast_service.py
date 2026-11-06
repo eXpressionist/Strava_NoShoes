@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 from uuid import UUID, uuid4
 
-import gpxpy
-
 from app.config import settings
 from app.models.forecast import (
     CheckpointInput,
@@ -119,6 +117,8 @@ class ForecastService:
         self, content: bytes, original_name: str = "route.gpx"
     ) -> ParsedRoute:
         try:
+            import gpxpy
+
             text = content.decode("utf-8-sig")
             gpx = gpxpy.parse(text)
         except Exception as exc:

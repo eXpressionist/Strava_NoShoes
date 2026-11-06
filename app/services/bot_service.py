@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -5,21 +7,11 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from html import escape
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from urllib.parse import urlencode
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import MessageLimit
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
 
 from app.config import settings
 from app.models.strava import Activity, ActivityFilter
@@ -27,6 +19,10 @@ from app.services.gear_policy import requires_gear
 from app.services.remote_activity_service import RemoteActivityService
 from app.services.unified_service import UnifiedActivityService
 from app.utils.gpx_cleanup import cleanup_all_gpx_files
+
+if TYPE_CHECKING:
+    from telegram import Update
+    from telegram.ext import ContextTypes
 
 # Set up logging
 logging.basicConfig(
@@ -249,6 +245,8 @@ class BotService:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Handle messages containing Garmin or Strava activity links."""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
         if not await self._authorize(update):
             return
         message_text = update.message.text
@@ -523,6 +521,8 @@ class BotService:
     async def _send_strava_gear_reminder(
         self, chat_id: int, heading: str, activities: list[Activity]
     ) -> None:
+        from telegram.constants import MessageLimit
+
         messages = [f"🏃 {heading}"]
         for activity in activities:
             if activity.gear_id:
@@ -637,6 +637,14 @@ class BotService:
         if not self.token or self.token == "your_telegram_bot_token_here":
             logger.warning("Bot token not configured. Telegram bot will not start.")
             return
+
+        from telegram.ext import (
+            Application,
+            CallbackQueryHandler,
+            CommandHandler,
+            MessageHandler,
+            filters,
+        )
 
         self.application = Application.builder().token(self.token).build()
 

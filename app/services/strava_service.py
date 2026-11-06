@@ -11,9 +11,6 @@ import httpx
 from app.config import settings
 from app.models.strava import Activity, Athlete, Gear, StravaTokens, ActivityFilter
 
-import gpxpy
-import gpxpy.gpx
-
 
 _TOKEN_REFRESH_LOCKS: Dict[str, asyncio.Lock] = {}
 
@@ -466,7 +463,9 @@ class StravaService:
         
         if "latlng" not in streams:
             raise StravaAPIError(f"No GPS data (latlng stream) available for activity {activity_id}")
-        
+
+        import gpxpy.gpx
+
         # Construct GPX
         gpx = gpxpy.gpx.GPX()
         gpx.name = activity_name
