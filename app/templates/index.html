@@ -841,7 +841,7 @@
 
             container.innerHTML = activities.map(activity => `
                 <div class="col-md-6 col-lg-4 mb-3">
-                    <div class="card activity-card ${activity.gear_id ? 'has-gear' : 'no-gear'}">
+                    <div class="card activity-card ${activity.gear_status_known === false ? '' : (activity.gear_id ? 'has-gear' : 'no-gear')}">
                         <div class="card-body">
                             <h6 class="card-title">
                                 <i class="fas fa-${getActivityIcon(activity.sport_type)}"></i>
@@ -869,7 +869,8 @@
                                     <br><small>min/km</small>
                                 </div>
                             </div>
-                             ${activity.gear_id ?
+                             ${activity.gear_status_known === false ?
+                    `<div class="mt-2"><span class="badge bg-secondary">Gear unavailable</span></div>` : activity.gear_id ?
                     `<div class="mt-2"><span class="badge bg-success">Gear: ${activity.gear_name || activity.gear_id}</span></div>` :
                     `<div class="mt-2"><span class="badge bg-warning">No Gear</span></div>`
                 }
@@ -994,7 +995,7 @@
                 : (activity.sport_type === 'Run' ? 'Road Run' : activity.sport_type);
 
             return `
-                <a href="${getActivityUrl(activity)}" target="_blank" rel="noopener noreferrer" class="calendar-activity ${activity.gear_id ? 'has-gear' : ''}">
+                <a href="${getActivityUrl(activity)}" target="_blank" rel="noopener noreferrer" class="calendar-activity ${activity.gear_status_known !== false && activity.gear_id ? 'has-gear' : ''}">
                     <i class="fas fa-${getActivityIcon(activity.sport_type)}"></i>
                     ${activity.name}
                     <span class="calendar-activity-meta">${typeLabel} - ${(activity.distance / 1000).toFixed(2)} km</span>

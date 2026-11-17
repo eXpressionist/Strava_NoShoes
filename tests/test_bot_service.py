@@ -182,7 +182,7 @@ async def test_reminder_fetches_garmin_without_calling_gear_endpoint(
     reminder_bot, monkeypatch
 ):
     class Client:
-        def get_activities_by_date(self, start_date, end_date):
+        async def get_activities_by_date(self, start_date, end_date):
             return [
                 {
                     "activityId": 123,

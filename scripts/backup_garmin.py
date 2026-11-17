@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class GarminBackup:
-    """Upsert Garmin activity summaries and their assigned gear."""
+    """Upsert summaries, retaining archived gear when the API cannot read it."""
 
     def __init__(self, garmin: Optional[GarminService] = None) -> None:
         self.garmin = garmin or GarminService()
@@ -76,6 +76,9 @@ class GarminBackup:
                 existing = result.scalar_one_or_none()
                 values = self._activity_values(activity)
                 if existing:
+                    if not activity.gear_status_known:
+                        values.pop("gear_id")
+                        values.pop("gear_name")
                     for field, value in values.items():
                         setattr(existing, field, value)
                     self.stats["activities_updated"] += 1

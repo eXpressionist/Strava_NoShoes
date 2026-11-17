@@ -3,7 +3,7 @@
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,11 +34,12 @@ class Settings(BaseSettings):
     )
 
     # Garmin becomes the live activity source after the Strava cutoff.
-    garmin_email: str = Field(default="", description="Garmin Connect email/login")
-    garmin_password: str = Field(default="", description="Garmin Connect password")
-    garmin_token_store: str = Field(
-        default="data/garmin_tokens",
-        description="Directory to store Garmin session tokens",
+    garmin_api_key: SecretStr = Field(
+        default=SecretStr(""), description="Garmin Personal API key"
+    )
+    garmin_api_key_file: str = Field(
+        default="",
+        description="File containing a Garmin Personal API key (takes precedence)",
     )
 
     # Telegram Bot Configuration
@@ -123,7 +124,7 @@ class Settings(BaseSettings):
     garmin_sync_lookback_days: int = Field(
         default=7,
         ge=1,
-        description="Days to re-sync so late Garmin gear edits are captured",
+        description="Days to re-sync so late Garmin activity updates are captured",
     )
     garmin_health_sync_enabled: bool = Field(default=True)
     garmin_health_sync_interval_hours: int = Field(default=6, ge=1, le=168)

@@ -383,8 +383,9 @@ async def test_cli_writes_report_and_journal_for_verified_assignments(
     from scripts import migrate_gear
 
     sync, activities, gear, client = migration
-    monkeypatch.setattr(settings, "garmin_email", "test@example.com")
-    monkeypatch.setattr(settings, "garmin_password", "test")
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(settings, "garmin_api_key", SecretStr("test-api-key"))
     monkeypatch.setattr(migrate_gear, "GearMigration", lambda **kwargs: sync)
     args = SimpleNamespace(
         timezone="Europe/Moscow",

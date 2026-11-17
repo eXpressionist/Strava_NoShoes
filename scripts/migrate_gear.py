@@ -10,7 +10,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from app.config import settings
+from app.services.garmin_api import GarminAPIError
+from app.services.garmin_service import GarminService
 from app.services.gear_migration_service import GearMigration
 
 
@@ -26,7 +27,7 @@ def write_report(path: Path, report: dict) -> None:
 @contextmanager
 def migration_lock():
     """OS releases the lock even if the process crashes during a request."""
-    path = Path(settings.garmin_token_store) / "gear-migration.lock"
+    path = Path("data/gear-migration.lock")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as stream:
         if os.name == "nt":
@@ -56,9 +57,10 @@ async def run(args: argparse.Namespace) -> int:
     if first is not None and first > last:
         raise ValueError("--from-date must not be later than --to-date")
     migration = GearMigration(delay=args.request_delay)
-    if not settings.garmin_email or not settings.garmin_password:
+    migration._require_gear_api()
+    if not GarminService.is_configured():
         raise ValueError(
-            "Configure GARMIN_EMAIL and GARMIN_PASSWORD in the primary container"
+            "Configure GARMIN_API_KEY or GARMIN_API_KEY_FILE in the primary container"
         )
     mapping = (
         json.loads(args.gear_map.read_text(encoding="utf-8")) if args.gear_map else {}
@@ -162,7 +164,11 @@ def main() -> int:
         with migration_lock():
             return asyncio.run(run(args))
     except Exception as exc:
-        detail = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+        detail = (
+            str(exc)
+            if isinstance(exc, (ValueError, GarminAPIError))
+            else type(exc).__name__
+        )
         print(
             f"Migration stopped: {detail}. Check credentials, report and journal before rerunning.",
             file=sys.stderr,

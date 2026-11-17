@@ -186,7 +186,7 @@ async def get_activity_stats(
         total_activities = len(activities)
         total_distance = sum(activity.distance for activity in activities)
         total_time = sum(activity.moving_time for activity in activities)
-        activities_without_gear = len([a for a in activities if a.gear_id is None])
+        activities_without_gear = sum(a.gear_status_known and a.gear_id is None for a in activities)
 
         activity_types = {}
         activity_type_details = {}

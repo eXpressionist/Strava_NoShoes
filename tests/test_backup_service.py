@@ -181,6 +181,7 @@ async def test_garmin_sync_is_idempotent_and_refreshes_gear(tmp_path, monkeypatc
             "movingDuration": 3_500,
         }
     )
+    activity.gear_status_known = True
     activity.gear_id = "shoe-1"
     activity.gear_name = "Daily shoes"
 
@@ -188,6 +189,11 @@ async def test_garmin_sync_is_idempotent_and_refreshes_gear(tmp_path, monkeypatc
     await backup._upsert_activities([activity])
     activity.name = "Updated Morning Run"
     activity.gear_name = "Renamed shoes"
+    await backup._upsert_activities([activity])
+    # Personal API cannot read gear; do not erase the previously saved assignment.
+    activity.gear_status_known = False
+    activity.gear_id = None
+    activity.gear_name = None
     await backup._upsert_activities([activity])
 
     async with session_factory() as session:
@@ -197,8 +203,15 @@ async def test_garmin_sync_is_idempotent_and_refreshes_gear(tmp_path, monkeypatc
     assert len(activities) == 1
     assert activities[0].source == "garmin"
     assert activities[0].name == "Updated Morning Run"
+    assert activities[0].gear_id == "shoe-1"
+    assert activities[0].gear_name == "Renamed shoes"
+    from app.services.unified_service import UnifiedActivityService
+
+    assert (
+        UnifiedActivityService()._db_to_model(activities[0]).gear_status_known is False
+    )
     assert len(gear) == 1
     assert gear[0].name == "Renamed shoes"
     assert backup.stats["activities_saved"] == 1
-    assert backup.stats["activities_updated"] == 1
+    assert backup.stats["activities_updated"] == 2
     await engine.dispose()

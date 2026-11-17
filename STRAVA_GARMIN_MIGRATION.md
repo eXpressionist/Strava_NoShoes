@@ -15,8 +15,9 @@
 - С `2026-10-16` история до cutoff читается из SQLite, новые активности — из
   Garmin Connect и ежедневно сохраняются в ту же SQLite. При временной
   недоступности Garmin приложение использует последнюю синхронизированную копию.
-- Проверка Gear использует activity-specific Garmin endpoint. Силовые тренировки
-  (`WeightTraining`) исключены из проверки и напоминаний о Gear.
+- Официальный Personal API не предоставляет Gear. Новые данные Garmin имеют
+  `gear_status_known=false` и не считаются тренировками без экипировки.
+  Силовые (`WeightTraining`) исключены из напоминаний о Gear.
 
 ## Напоминания основного Telegram-бота
 
@@ -50,10 +51,13 @@ STRAVA_BACKUP_STREAMS_PER_RUN=60
 GARMIN_SYNC_ENABLED=true
 GARMIN_SYNC_LOOKBACK_DAYS=7
 
-GARMIN_EMAIL=...
-GARMIN_PASSWORD=...
-GARMIN_TOKEN_STORE=/app/data/garmin_tokens
+GARMIN_API_KEY_FILE=/app/data/garmin-api-key
 ```
+
+Удалите старые `GARMIN_EMAIL`, `GARMIN_PASSWORD`, `GARMIN_TOKEN_STORE` из `.env`.
+Создайте Personal API Key и сохраните его в файле по инструкции
+[подключения Garmin](DOCKER_DEPLOYMENT.md#подключение-официального-garmin-personal-api).
+Bearer-токен получается автоматически и хранится только в памяти.
 
 Второй контейнер использует собственные Strava credentials и БД.
 Его Compose-конфигурация фиксирует `MIGRATION_ENABLED=false` и
@@ -125,7 +129,7 @@ scp your-user@5.181.187.148:/home/NoShoes2/data/strava_noshoes-secondary.snapsho
 
 Для полного восстановления контейнеров отдельно сохраните `.env`,
 `.env.secondary`, `strava_tokens*.json`, `bot_state*.json` и каталоги
-`garmin_tokens*`. Они содержат секреты, поэтому храните их только в
+файл API-ключа Garmin. Они содержат секреты, поэтому храните их только в
 зашифрованном архиве; для обычного бэкапа тренировок достаточно двух SQLite
 snapshot-файлов.
 

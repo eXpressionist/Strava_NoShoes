@@ -7,19 +7,14 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 import pytest_asyncio
-from garminconnect import (
-    Garmin,
-    GarminConnectAuthenticationError,
-    GarminConnectConnectionError,
-    GarminConnectTooManyRequestsError,
-)
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.config import Settings, settings
 from app.models.database import Base, GarminHealthDB
 from app.services import garmin_health_service as health
+from app.services.garmin_api import GarminAPIError
 
 TODAY = date(2026, 10, 26)
 
@@ -47,9 +42,10 @@ async def health_db(tmp_path, monkeypatch):
 
 
 def collector(**methods):
-    garmin = SimpleNamespace(
-        _ensure_connected=AsyncMock(), client=SimpleNamespace(**methods)
-    )
+    async def get_health(metric, day):
+        return methods[{"hrv": "get_hrv_data", "sleep": "get_sleep_data"}[metric]](day)
+
+    garmin = SimpleNamespace(_ensure_connected=AsyncMock(), get_health=get_health)
     return health.GarminHealthSync(garmin=garmin)
 
 
@@ -115,8 +111,7 @@ async def test_sensor_failure_preserves_history_and_other_metrics_progress(
     monkeypatch.setattr(
         health, "HEALTH_METRICS", {"hrv": "get_hrv_data", "sleep": "get_sleep_data"}
     )
-    failure = GarminConnectConnectionError("private response body")
-    failure.response = SimpleNamespace(status_code=403)
+    failure = GarminAPIError("private response body", status_code=403)
     sync = collector(
         get_hrv_data=Mock(side_effect=failure),
         get_sleep_data=Mock(return_value={"sleep": [1, 2]}),
@@ -134,31 +129,30 @@ async def test_sensor_failure_preserves_history_and_other_metrics_progress(
 
 @pytest.mark.asyncio
 async def test_missing_day_does_not_block_older_data(health_db):
-    missing = GarminConnectConnectionError("not found")
-    missing.response = SimpleNamespace(status_code=404)
+    missing = GarminAPIError("not found", status_code=404)
     method = Mock(side_effect=[missing, {"value": 55}, {"value": 50}])
     result = await collector(get_hrv_data=method).run(TODAY)
     assert result == {"records_saved": 3, "empty_responses": 1, "errors": []}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "failure", [GarminConnectAuthenticationError, GarminConnectTooManyRequestsError]
-)
+@pytest.mark.parametrize("status", [401, 429])
 async def test_auth_and_rate_limits_stop_requests_but_keep_progress(
-    health_db, monkeypatch, failure
+    health_db, monkeypatch, status
 ):
     monkeypatch.setattr(
         health, "HEALTH_METRICS", {"hrv": "get_hrv_data", "sleep": "get_sleep_data"}
     )
     sleep = Mock()
     sync = collector(
-        get_hrv_data=Mock(side_effect=[{"value": 55}, failure("sensitive")]),
+        get_hrv_data=Mock(
+            side_effect=[{"value": 55}, GarminAPIError("sensitive", status_code=status)]
+        ),
         get_sleep_data=sleep,
     )
     result = await sync.run(TODAY)
     assert result["records_saved"] == 1
-    assert result["errors"][0]["error"] == failure.__name__
+    assert result["errors"][0]["error"] == "GarminAPIError"
     sleep.assert_not_called()
     async with health_db() as session:
         assert await session.scalar(select(GarminHealthDB.payload)) == {"value": 55}
@@ -222,8 +216,7 @@ def test_secondary_disabled_and_unconfigured_instances_do_not_collect(monkeypatc
     monkeypatch.setattr(settings, "garmin_health_sync_enabled", True)
     monkeypatch.setattr(settings, "migration_enabled", True)
     monkeypatch.setattr(settings, "migration_cutoff", "2000-01-01")
-    monkeypatch.setattr(settings, "garmin_email", "test@example.com")
-    monkeypatch.setattr(settings, "garmin_password", "test")
+    monkeypatch.setattr(settings, "garmin_api_key", SecretStr("test-api-key"))
     assert health.GarminHealthScheduler.should_run()
     monkeypatch.setattr(settings, "garmin_sync_enabled", False)
     assert health.GarminHealthScheduler.should_run()
@@ -233,7 +226,8 @@ def test_secondary_disabled_and_unconfigured_instances_do_not_collect(monkeypatc
     monkeypatch.setattr(settings, "garmin_health_sync_enabled", False)
     assert not health.GarminHealthScheduler.should_run()
     monkeypatch.setattr(settings, "garmin_health_sync_enabled", True)
-    monkeypatch.setattr(settings, "garmin_password", "")
+    monkeypatch.setattr(settings, "garmin_api_key", SecretStr(""))
+    monkeypatch.setattr(settings, "garmin_api_key_file", "")
     assert not health.GarminHealthScheduler.should_run()
 
 
@@ -259,6 +253,16 @@ def test_invalid_health_dates_and_timezones_fail_validation(values):
         Settings(_env_file=None, **values)
 
 
-def test_metric_methods_exist_in_installed_garmin_library():
-    for method in health.HEALTH_METRICS.values():
-        assert callable(getattr(Garmin, method))
+def test_only_documented_personal_api_metrics_are_collected():
+    assert set(health.HEALTH_METRICS) == {
+        "daily_summary",
+        "sleep",
+        "hrv",
+        "body_battery",
+        "stress",
+        "heart_rate",
+        "steps",
+        "spo2",
+        "body_composition",
+        "hydration",
+    }

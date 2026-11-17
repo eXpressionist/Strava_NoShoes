@@ -161,8 +161,9 @@ async def test_cli_does_not_require_strava_tokens(archive_db, monkeypatch, tmp_p
         garmin=SimpleNamespace(client=FakeGarmin(), _ensure_connected=AsyncMock()),
         delay=0,
     )
-    monkeypatch.setattr(settings, "garmin_email", "test@example.com")
-    monkeypatch.setattr(settings, "garmin_password", "test")
+    from pydantic import SecretStr
+
+    monkeypatch.setattr(settings, "garmin_api_key", SecretStr("test-api-key"))
     monkeypatch.setattr(migrate_gear, "GearMigration", lambda **kwargs: sync)
     args = SimpleNamespace(
         timezone="Europe/Moscow",

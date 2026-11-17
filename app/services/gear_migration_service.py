@@ -8,6 +8,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from app.services.garmin_api import GarminAPIError
 from app.services.garmin_service import GarminService
 from app.services.strava_archive import StravaArchive
 
@@ -170,6 +171,13 @@ class GearMigration:
         self.garmin = garmin or GarminService()
         self.delay = delay
 
+    def _require_gear_api(self) -> None:
+        if not getattr(self.garmin, "supports_gear", True):
+            raise GarminAPIError(
+                "Garmin Personal API does not support reading or modifying gear; "
+                "gear migration is unavailable"
+            )
+
     async def _call(self, method_name: str, *args, **kwargs) -> Any:
         await asyncio.sleep(self.delay)
         return await asyncio.to_thread(
@@ -233,6 +241,7 @@ class GearMigration:
         timezone_name: str = "Europe/Moscow",
         mapping: dict[str, str] | None = None,
     ) -> dict:
+        self._require_gear_api()
         if first is not None and last < first:
             raise ValueError("End date must not precede start date")
         zone = ZoneInfo(timezone_name)
@@ -449,6 +458,7 @@ class GearMigration:
         journal: Callable[[dict], None],
         replace_existing: bool = False,
     ) -> dict:
+        self._require_gear_api()
         result = {
             "created": 0,
             "linked": 0,

@@ -17,34 +17,30 @@ from app.services.garmin_service import GarminService
 
 logger = logging.getLogger(__name__)
 
-# Only read methods accepting one local calendar date. Keep original responses:
+# Only documented Personal API metrics for one local calendar date. Keep responses:
 # units, nested fields and intraday series can be interpreted by future dashboards.
-HEALTH_METRICS = {
-    "daily_summary": "get_user_summary",
-    "sleep": "get_sleep_data",
-    "hrv": "get_hrv_data",
-    "body_battery": "get_body_battery",
-    "stress": "get_stress_data",
-    "heart_rate": "get_heart_rates",
-    "resting_heart_rate": "get_rhr_day",
-    "steps": "get_steps_data",
-    "spo2": "get_spo2_data",
-    "respiration": "get_respiration_data",
-    "training_readiness": "get_training_readiness",
-    "training_status": "get_training_status",
-    "max_metrics": "get_max_metrics",
-    "body_composition": "get_body_composition",
-    "hydration": "get_hydration_data",
-}
+HEALTH_METRICS = (
+    "daily_summary",
+    "sleep",
+    "hrv",
+    "body_battery",
+    "stress",
+    "heart_rate",
+    "steps",
+    "spo2",
+    "body_composition",
+    "hydration",
+)
 
 
 def _http_status(exc: Exception) -> Optional[int]:
-    """Garmin versions may attach the response to a wrapped exception."""
+    """Read an API status, including errors wrapped by another service."""
     current: Optional[BaseException] = exc
     seen = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         status = getattr(getattr(current, "response", None), "status_code", None)
+        status = status or getattr(current, "status_code", None)
         if status is not None:
             return status
         current = current.__cause__
@@ -130,19 +126,15 @@ class GarminHealthSync:
             result["errors"].append({"error": type(exc).__name__})
             return result
 
-        for metric, method_name in HEALTH_METRICS.items():
-            method = getattr(self.garmin.client, method_name, None)
-            if method is None:
-                result["errors"].append({"metric": metric, "error": "unsupported"})
-                continue
+        for metric in HEALTH_METRICS:
             for day in await self._dates(metric, today):
                 await asyncio.sleep(settings.garmin_health_request_delay_seconds)
                 try:
-                    payload = await asyncio.to_thread(method, day.isoformat())
+                    payload = await self.garmin.get_health(metric, day.isoformat())
                 except Exception as exc:
                     error_type = type(exc).__name__
                     status = _http_status(exc)
-                    if status == 404 or error_type == "GarminConnectNotFoundError":
+                    if status == 404:
                         await self._save(metric, day, None)
                         result["records_saved"] += 1
                         result["empty_responses"] += 1
@@ -153,17 +145,8 @@ class GarminHealthSync:
                     logger.warning(
                         "Garmin health %s on %s: %s", metric, day, error_type
                     )
-                    if (
-                        status in {401, 429}
-                        or error_type
-                        in {
-                            "GarminConnectAuthenticationError",
-                            "GarminConnectTooManyRequestsError",
-                        }
-                        or (
-                            error_type == "GarminConnectConnectionError"
-                            and status is None
-                        )
+                    if status in {401, 429} or (
+                        status is None and error_type == "GarminAPIError"
                     ):
                         return result
                     # Retry next run, leaving any previously saved response intact.
@@ -193,7 +176,7 @@ class GarminHealthScheduler:
         return (
             settings.garmin_health_sync_enabled
             and settings.migration_enabled
-            and bool(settings.garmin_email and settings.garmin_password)
+            and GarminService.is_configured()
         )
 
     @classmethod

@@ -90,6 +90,7 @@ class Activity(BaseModel):
     flagged: bool
     gear_id: Optional[str] = None
     gear_name: Optional[str] = None
+    gear_status_known: bool = True
     start_latlng: Optional[List[float]] = None
     end_latlng: Optional[List[float]] = None
     average_speed: float

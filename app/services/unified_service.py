@@ -21,13 +21,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import settings
 from app.models.database import (
     ActivityDB,
-    GearDB,
     ActivityStreamDB,
+    GearDB,
     async_session,
     init_db,
 )
-from app.models.strava import Activity, Gear, ActivityFilter
-from app.services.garmin_service import GarminService, GarminAPIError
+from app.models.strava import Activity, ActivityFilter, Gear
+from app.services.garmin_service import GarminAPIError, GarminService
 from app.services.gear_policy import requires_gear
 from app.services.strava_service import StravaAPIError, StravaService
 
@@ -368,7 +368,12 @@ class UnifiedActivityService:
             result = await session.stream_scalars(query)
             try:
                 async for batch in result.partitions():
-                    activities.extend(self._db_to_model(row) for row in batch)
+                    models = [self._db_to_model(row) for row in batch]
+                    activities.extend(
+                        self._apply_filters(models, activity_filter)
+                        if activity_filter
+                        else models
+                    )
             finally:
                 await result.close()
             return activities
@@ -376,9 +381,12 @@ class UnifiedActivityService:
     def _db_to_model(self, db: ActivityDB) -> Activity:
         """Convert DB record to Pydantic Activity model."""
         workout_type = None
+        gear_status_known = True
         if db.raw_data:
             try:
-                workout_type = json.loads(db.raw_data).get("workout_type")
+                raw = json.loads(db.raw_data)
+                workout_type = raw.get("workout_type")
+                gear_status_known = raw.get("gear_status_known", True)
             except (json.JSONDecodeError, TypeError):
                 pass
         return Activity(
@@ -411,6 +419,7 @@ class UnifiedActivityService:
             flagged=False,
             gear_id=db.gear_id,
             gear_name=db.gear_name,
+            gear_status_known=gear_status_known,
             start_latlng=[db.start_lat, db.start_lng] if db.start_lat else None,
             end_latlng=[db.end_lat, db.end_lng] if db.end_lat else None,
             average_speed=db.average_speed or 0.0,
@@ -435,11 +444,13 @@ class UnifiedActivityService:
             result = [a for a in result if a.sport_type == f.activity_type]
         if f.has_gear is not None:
             if f.has_gear:
-                result = [a for a in result if a.gear_id]
+                result = [a for a in result if a.gear_status_known and a.gear_id]
             else:
-                result = [a for a in result if not a.gear_id]
+                result = [a for a in result if a.gear_status_known and not a.gear_id]
         if f.gear_id:
-            result = [a for a in result if a.gear_id == f.gear_id]
+            result = [
+                a for a in result if a.gear_status_known and a.gear_id == f.gear_id
+            ]
         return result
 
     async def _gpx_from_streams(
