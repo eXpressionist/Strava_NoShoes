@@ -52,7 +52,8 @@ class BotService:
             self.user_services = {
                 settings.bot_primary_user_id: self.activity_service,
                 settings.bot_secondary_user_id: RemoteActivityService(
-                    settings.bot_secondary_api_url
+                    settings.bot_secondary_api_url,
+                    settings.bot_secondary_api_token.get_secret_value(),
                 ),
             }
 

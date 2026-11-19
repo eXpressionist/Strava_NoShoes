@@ -45,6 +45,11 @@ STRAVA_REFRESH_TOKEN=...
 Polling второго экземпляра отключён через `BOT_ENABLED: "false"` в Compose;
 его API и синхронизация Strava продолжают работать.
 
+Задайте во втором `.env.secondary` свой `DASHBOARD_PASSWORD` и отдельный
+`DASHBOARD_SESSION_SECRET` по [инструкции развёртывания](DOCKER_DEPLOYMENT.md).
+Используйте разные секреты сеансов для двух экземпляров, в том числе при
+открытии панелей на одном хосте через разные порты.
+
 ## Общий бот для двух пользователей
 
 В `.env` основного экземпляра укажите токен выбранного общего бота и два
@@ -56,7 +61,11 @@ BOT_API_TOKEN=...
 BOT_PRIMARY_USER_ID=123456789
 BOT_SECONDARY_USER_ID=987654321
 BOT_TIMEZONE=Europe/Moscow
+BOT_SECONDARY_API_TOKEN=...
 ```
+
+Сгенерируйте отдельный случайный токен. Укажите его в `BOT_SECONDARY_API_TOKEN`
+основного `.env` и в `DASHBOARD_API_TOKEN` второго `.env.secondary`.
 
 Замените ID примера своими. При двух нулевых ID сохраняется старый режим
 одного аккаунта. Неполная или одинаковая пара ID отклоняется при загрузке
@@ -121,8 +130,9 @@ docker compose --profile secondary up -d --build strava-noshoes-secondary
 
 ```bash
 docker compose --profile secondary up -d --no-deps --build --force-recreate strava-noshoes-secondary
-curl http://localhost:8001/api/v1/backup/status
 ```
+
+После входа во второй экземпляр откройте `/api/v1/backup/status` на его адресе.
 
 Ожидаемые поля статуса: `migration_enabled=false`, `current_source="strava"`,
 `current_source_enabled=true`, `active_through=null`. Во время догрузки
@@ -135,12 +145,8 @@ curl http://localhost:8001/api/v1/backup/status
 - основной экземпляр: <http://localhost:8000>;
 - второй экземпляр: <http://localhost:8001>.
 
-Проверьте, что контейнеры подключены к разным спортсменам:
-
-```bash
-curl http://localhost:8000/api/v1/athlete
-curl http://localhost:8001/api/v1/athlete
-```
+Войдите в каждую панель и откройте `/api/v1/athlete` на обоих адресах,
+чтобы проверить, что контейнеры подключены к разным спортсменам.
 
 Значения поля `id` должны отличаться. Если они одинаковые, во втором `.env`
 используются OAuth-токены первого Strava-аккаунта. Если запросы к разным портам

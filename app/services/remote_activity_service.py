@@ -14,15 +14,21 @@ from app.services.unified_service import UnifiedServiceError
 class RemoteActivityService:
     """Activity operations used by the shared bot for the Strava-only account."""
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, api_token: str = ""):
         self.base_url = base_url.rstrip("/")
+        self.api_token = api_token
 
     def strava_is_live(self) -> bool:
         return True
 
     async def _get(self, path: str, params: Optional[dict] = None) -> httpx.Response:
+        headers = (
+            {"Authorization": f"Bearer {self.api_token}"} if self.api_token else {}
+        )
         try:
-            async with httpx.AsyncClient(base_url=self.base_url, timeout=60) as client:
+            async with httpx.AsyncClient(
+                base_url=self.base_url, headers=headers, timeout=60
+            ) as client:
                 response = await client.get(path, params=params)
                 response.raise_for_status()
                 return response

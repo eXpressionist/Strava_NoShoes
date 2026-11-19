@@ -114,6 +114,16 @@ GPX_CLEANUP_SCHEDULE_HOUR=3
 GPX_CLEANUP_SCHEDULE_MINUTE=0
 ```
 
+Перед запуском или обновлением задайте в `.env` свой `DASHBOARD_PASSWORD`
+и отдельный `DASHBOARD_SESSION_SECRET`. Для секрета используйте результат
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`. Пока эти
+настройки пусты, вход закрыт. Открывайте панель через HTTPS. Для локального
+теста по HTTP можно задать `DASHBOARD_COOKIE_SECURE=false`.
+
+Для автоматизации можно добавить отдельный случайный `DASHBOARD_API_TOKEN`
+и передавать его в заголовке `Authorization: Bearer …`. Для общего
+Telegram-бота настройте этот токен по [инструкции для двух экземпляров](MULTI_INSTANCE.md).
+
 ### Шаг 4: Запуск через Docker Compose
 
 ```bash
@@ -133,11 +143,11 @@ docker-compose ps
 # Проверка health check
 curl http://localhost:8000/health
 
-# Проверка главной страницы
-curl http://localhost:8000
+# Проверка перенаправления на форму входа (HTTP 303)
+curl -I http://localhost:8000
 ```
 
-Приложение доступно по адресу: `http://your-server-ip:8000`
+Для проверки в браузере откройте адрес панели и войдите с `DASHBOARD_PASSWORD`.
 
 ### Подключение официального Garmin Personal API
 
@@ -185,8 +195,9 @@ GPX строится из скачанного FIT: сохраняются GPS, 
 
 ```bash
 docker compose up -d --no-deps --build strava-noshoes
-curl http://localhost:8000/api/v1/backup/status
 ```
+
+После входа в панель откройте `/api/v1/backup/status` на том же адресе.
 
 Сбор выполняется в фоне при старте и каждые 6 часов независимо от синхронизации
 тренировок. Последние 7 календарных дней по `Europe/Moscow` обновляются заново,
@@ -623,8 +634,9 @@ docker compose up -d --no-deps --build --force-recreate strava-noshoes
 
 ```bash
 docker compose --profile secondary up -d --no-deps --build --force-recreate strava-noshoes-secondary
-curl http://localhost:8001/api/v1/backup/status
 ```
+
+После входа во второй экземпляр откройте `/api/v1/backup/status` на его адресе.
 
 В `.env.secondary` должны быть включены `STRAVA_BACKUP_ENABLED=true` и
 `STRAVA_BACKUP_ON_STARTUP=true`, чтобы при пересоздании догрузить пропущенные

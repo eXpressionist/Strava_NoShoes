@@ -107,12 +107,8 @@ async def test_calculate_returns_checkpoint_and_finish_ranges(tmp_path):
     )
 
 
-def test_race_forecast_page_is_available():
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    response = TestClient(app).get("/race-forecast")
+def test_race_forecast_page_is_available(signed_in_client):
+    response = signed_in_client.get("/race-forecast")
 
     assert response.status_code == 200
     assert "Прогноз трейловой гонки" in response.text

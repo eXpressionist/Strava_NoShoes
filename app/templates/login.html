@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Вход — Strava NoShoes</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <style>
+        :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: light-dark(#f4f6f8, #151b24);
+            color: light-dark(#212529, #f0f3f7);
+        }
+        main {
+            box-sizing: border-box;
+            width: min(24rem, calc(100% - 2rem));
+            padding: 1.75rem;
+            border: 1px solid light-dark(#dee2e6, #3b4757);
+            border-radius: .75rem;
+            background: light-dark(#fff, #202936);
+        }
+        h1 { margin: 0 0 1.25rem; font-size: 1.5rem; }
+        form { display: grid; gap: .65rem; }
+        input, button {
+            box-sizing: border-box;
+            width: 100%;
+            padding: .65rem .8rem;
+            border-radius: .375rem;
+            font: inherit;
+        }
+        input { border: 1px solid light-dark(#818a96, #8897aa); }
+        button { border: 0; background: #0b5ed7; color: #fff; cursor: pointer; }
+        :focus-visible { outline: 2px solid #5596fb; outline-offset: 2px; }
+        p { margin: 0; }
+        [role="alert"] { color: light-dark(#a82032, #ffadba); }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Strava NoShoes</h1>
+        {% if unavailable %}
+        <p>Вход пока не настроен.</p>
+        {% else %}
+        <form action="/login" method="post">
+            <input type="hidden" name="next" value="{{ destination }}">
+            <label for="password">Пароль панели</label>
+            <input id="password" name="password" type="password" autocomplete="current-password"
+                   required{% if invalid %} aria-invalid="true" aria-describedby="login-error"{% endif %}>
+            {% if invalid %}
+            <p id="login-error" role="alert">Неверный пароль.</p>
+            {% endif %}
+            <button type="submit">Войти</button>
+        </form>
+        {% endif %}
+    </main>
+</body>
+</html>

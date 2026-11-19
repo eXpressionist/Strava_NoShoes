@@ -16,16 +16,16 @@ def test_health_check():
     assert data["app"] == "Strava NoShoes"
 
 
-def test_root_endpoint():
+def test_root_endpoint(signed_in_client):
     """Test the root endpoint returns HTML."""
-    response = client.get("/")
+    response = signed_in_client.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
 
 
-def test_custom_ranges_wait_for_dates_before_loading():
+def test_custom_ranges_wait_for_dates_before_loading(signed_in_client):
     """Custom ranges should not fetch all history before dates are selected."""
-    response = client.get("/")
+    response = signed_in_client.get("/")
     assert response.status_code == 200
     html = response.text
 
@@ -40,9 +40,9 @@ def test_custom_ranges_wait_for_dates_before_loading():
     ) in html
 
 
-def test_activity_cards_show_weekday_dates():
+def test_activity_cards_show_weekday_dates(signed_in_client):
     """Activity cards should include weekday-aware date formatting."""
-    response = client.get("/")
+    response = signed_in_client.get("/")
     assert response.status_code == 200
     html = response.text
 
@@ -51,9 +51,9 @@ def test_activity_cards_show_weekday_dates():
     assert "${formatActivityDateWithWeekday(activity.start_date)}" in html
 
 
-def test_preset_activity_ranges_include_current_day():
+def test_preset_activity_ranges_include_current_day(signed_in_client):
     """Activity requests should convert end dates to exclusive upper bounds."""
-    response = client.get("/")
+    response = signed_in_client.get("/")
     assert response.status_code == 200
     html = response.text
 
@@ -64,18 +64,18 @@ def test_preset_activity_ranges_include_current_day():
     ) in html
 
 
-def test_custom_stats_range_includes_end_date():
+def test_custom_stats_range_includes_end_date(signed_in_client):
     """Custom stats requests should convert end dates to exclusive upper bounds."""
-    response = client.get("/")
+    response = signed_in_client.get("/")
     assert response.status_code == 200
     html = response.text
 
     assert "if (before) url += `&before=${toExclusiveBeforeDateKey(before)}`;" in html
 
 
-def test_calendar_view_mode_is_available():
+def test_calendar_view_mode_is_available(signed_in_client):
     """The activity list should support an optional calendar view."""
-    response = client.get("/")
+    response = signed_in_client.get("/")
     assert response.status_code == 200
     html = response.text
 
@@ -86,9 +86,9 @@ def test_calendar_view_mode_is_available():
     assert "strava_view_mode" in html
 
 
-def test_calendar_activity_meta_uses_ascii_separator():
+def test_calendar_activity_meta_uses_ascii_separator(signed_in_client):
     """Calendar activity labels should not render mojibake separators."""
-    response = client.get("/")
+    response = signed_in_client.get("/")
     assert response.status_code == 200
     html = response.text
 

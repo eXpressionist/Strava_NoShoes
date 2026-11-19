@@ -40,10 +40,11 @@ async def test_missing_gear_uses_secondary_api_and_date_filter(monkeypatch):
         assert request.url.host == "secondary"
         assert request.url.path == "/api/v1/activities/no-gear"
         assert request.url.params["after"] == "2026-10-22T18:00:00"
+        assert request.headers["authorization"] == "Bearer test-secondary-token"
         return httpx.Response(200, json=[strava_activity()])
 
     use_transport(monkeypatch, respond)
-    service = RemoteActivityService("http://secondary:8000/")
+    service = RemoteActivityService("http://secondary:8000/", "test-secondary-token")
     activities = await service.get_activities_without_gear(datetime(2026, 10, 22, 18))
     assert [(item.id, item.source) for item in activities] == [(456, "strava")]
 

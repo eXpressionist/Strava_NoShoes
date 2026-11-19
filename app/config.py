@@ -51,6 +51,7 @@ class Settings(BaseSettings):
         default="http://strava-noshoes-secondary:8000",
         description="Internal URL of the secondary Strava-only instance",
     )
+    bot_secondary_api_token: SecretStr = SecretStr("")
     bot_secondary_default_gear_by_sport: dict[str, str] = Field(
         default_factory=dict,
         description="Deprecated; ignored by general Gear reminders",
@@ -67,6 +68,10 @@ class Settings(BaseSettings):
     app_host: str = Field(default="0.0.0.0", description="Application host")
     app_port: int = Field(default=8000, description="Application port")
     app_debug: bool = Field(default=False, description="Debug mode")
+    dashboard_password: SecretStr = SecretStr("")
+    dashboard_session_secret: SecretStr = SecretStr("")
+    dashboard_cookie_secure: bool = True
+    dashboard_api_token: SecretStr = SecretStr("")
 
     # File Storage
     gpx_storage_path: str = Field(

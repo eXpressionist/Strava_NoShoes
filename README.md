@@ -90,6 +90,11 @@ APP_DEBUG=true
 GPX_STORAGE_PATH=./data/gpx
 ```
 
+Для входа задайте в `.env` пароль `DASHBOARD_PASSWORD` и отдельный секрет
+`DASHBOARD_SESSION_SECRET`. Секрет можно сгенерировать командой
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`. Для локального
+запуска по HTTP добавьте `DASHBOARD_COOKIE_SECURE=false`.
+
 ### 4. Установка зависимостей
 
 #### Через Poetry (рекомендуется)
@@ -152,6 +157,8 @@ docker-compose up -d
 - **API документация**: http://localhost:8000/docs
 - **ReDoc документация**: http://localhost:8000/redoc
 
+Для доступа к этим страницам введите пароль панели. Сеанс действует 12 часов.
+
 ### API Эндпоинты
 
 #### Основные эндпоинты:
@@ -167,21 +174,24 @@ docker-compose up -d
 
 #### Примеры запросов:
 
+Для запросов из терминала задайте случайный `DASHBOARD_API_TOKEN` в настройках
+приложения и используйте его значение в переменной окружения терминала.
+
 ```bash
 # Получить информацию об атлете
-curl http://localhost:8000/api/v1/athlete
+curl -H "Authorization: Bearer $DASHBOARD_API_TOKEN" http://localhost:8000/api/v1/athlete
 
 # Получить последние 10 активностей
-curl "http://localhost:8000/api/v1/activities?per_page=10"
+curl -H "Authorization: Bearer $DASHBOARD_API_TOKEN" "http://localhost:8000/api/v1/activities?per_page=10"
 
 # Получить только беговые активности
-curl "http://localhost:8000/api/v1/activities?activity_type=Run"
+curl -H "Authorization: Bearer $DASHBOARD_API_TOKEN" "http://localhost:8000/api/v1/activities?activity_type=Run"
 
 # Получить активности без экипировки
-curl http://localhost:8000/api/v1/activities/no-gear
+curl -H "Authorization: Bearer $DASHBOARD_API_TOKEN" http://localhost:8000/api/v1/activities/no-gear
 
 # Скачать GPX файл
-curl -X POST http://localhost:8000/api/v1/activities/123456/download-gpx
+curl -H "Authorization: Bearer $DASHBOARD_API_TOKEN" -X POST http://localhost:8000/api/v1/activities/123456/download-gpx
 ```
 
 ### Фильтрация активностей
