@@ -2,10 +2,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from app.config import settings
-from app.main import backup_scheduler
+from app.main import app, backup_scheduler
 from app.utils import dashboard_auth
 
 
@@ -81,6 +82,19 @@ def test_login_ignores_external_destination(dashboard_client, dashboard_password
 
     assert response.status_code == 303
     assert response.headers["Location"] == "/"
+
+
+def test_password_sign_in_works_over_plain_http(dashboard_password):
+    client = TestClient(app, base_url="http://testserver:8000")
+    response = client.post(
+        "/login", data={"password": dashboard_password}, follow_redirects=True
+    )
+
+    assert response.status_code == 200
+    assert response.url.path == "/"
+    assert "Secure" not in response.history[0].headers["Set-Cookie"]
+    assert client.post("/logout", follow_redirects=False).status_code == 303
+    assert client.get("/", follow_redirects=False).status_code == 303
 
 
 def test_dashboard_session_expires(signed_in_client, monkeypatch):

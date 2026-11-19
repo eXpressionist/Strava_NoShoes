@@ -92,8 +92,9 @@ GPX_STORAGE_PATH=./data/gpx
 
 Для входа задайте в `.env` пароль `DASHBOARD_PASSWORD` и отдельный секрет
 `DASHBOARD_SESSION_SECRET`. Секрет можно сгенерировать командой
-`python -c "import secrets; print(secrets.token_urlsafe(32))"`. Для локального
-запуска по HTTP добавьте `DASHBOARD_COOKIE_SECURE=false`.
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`. Атрибут `Secure`
+у cookie сеанса включается автоматически при HTTPS. Для запуска по HTTP
+оставьте `DASHBOARD_COOKIE_SECURE=false`.
 
 ### 4. Установка зависимостей
 

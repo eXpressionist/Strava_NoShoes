@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     app_debug: bool = Field(default=False, description="Debug mode")
     dashboard_password: SecretStr = SecretStr("")
     dashboard_session_secret: SecretStr = SecretStr("")
-    dashboard_cookie_secure: bool = True
+    dashboard_cookie_secure: bool = False
     dashboard_api_token: SecretStr = SecretStr("")
 
     # File Storage

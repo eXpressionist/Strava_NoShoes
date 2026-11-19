@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from app.config import settings
+from app.config import Settings, settings
 from app.main import app
 
 
@@ -13,7 +13,11 @@ def dashboard_password(monkeypatch):
     monkeypatch.setattr(
         settings, "dashboard_session_secret", SecretStr("test-signing-secret")
     )
-    monkeypatch.setattr(settings, "dashboard_cookie_secure", True)
+    monkeypatch.setattr(
+        settings,
+        "dashboard_cookie_secure",
+        Settings.model_fields["dashboard_cookie_secure"].default,
+    )
     return password
 
 

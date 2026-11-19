@@ -117,8 +117,17 @@ GPX_CLEANUP_SCHEDULE_MINUTE=0
 Перед запуском или обновлением задайте в `.env` свой `DASHBOARD_PASSWORD`
 и отдельный `DASHBOARD_SESSION_SECRET`. Для секрета используйте результат
 `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Пока эти
-настройки пусты, вход закрыт. Открывайте панель через HTTPS. Для локального
-теста по HTTP можно задать `DASHBOARD_COOKIE_SECURE=false`.
+настройки пусты, вход закрыт. Для доступа через интернет используйте HTTPS.
+Приложение автоматически выставляет атрибут `Secure` при HTTPS. Если прокси
+завершает TLS и приложение видит запрос как HTTP, задайте
+`DASHBOARD_COOKIE_SECURE=true`.
+
+При прямом подключении по HTTP задайте `DASHBOARD_COOKIE_SECURE=false` в `.env`
+и пересоздайте контейнер, чтобы применить настройку:
+
+```bash
+docker compose up -d --no-deps --force-recreate --no-build strava-noshoes
+```
 
 Для автоматизации можно добавить отдельный случайный `DASHBOARD_API_TOKEN`
 и передавать его в заголовке `Authorization: Bearer …`. Для общего
